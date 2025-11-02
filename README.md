@@ -1,387 +1,321 @@
-# Tana Runtime
+# Tana Blockchain
 
-A lightweight experimental JavaScript/TypeScript runtime built on **deno_core** (Deno's V8 engine). It provides a sandboxed execution environment for TypeScript smart contracts, similar to Cloudflare Workers, designed for a ledger/blockchain system.
+A multi-currency blockchain ledger with TypeScript smart contracts and deterministic on-chain deployments.
+
+## 🎯 Vision
+
+Tana is a blockchain system that stores **everything deterministic on-chain**: code, compiled assets, balances, and state. Users can deploy full applications directly to the blockchain with immutable versioning and provable execution.
+
+**Core Features:**
+- 💰 Multi-currency ledger (fiat + crypto)
+- 🔒 TypeScript smart contracts in sandboxed V8 runtime
+- 👥 Users, teams, and channels
+- 🌐 Deploy full web apps on-chain (HTML/CSS/JS)
+- 🔍 Deterministic builds and time-travel debugging
 
 ---
 
-## Quick Start
+## 📁 Monorepo Structure
+
+```
+tana-runtime/                    # Monorepo root
+├── runtime/                     # Rust - V8 TypeScript execution engine
+│   ├── src/                     # Rust source (deno_core)
+│   └── Cargo.toml
+│
+├── node/                        # TypeScript/Bun - Blockchain node
+│   ├── src/                     # P2P, consensus, storage
+│   └── package.json
+│
+├── ledger/                      # TypeScript/Bun - Account & balance service
+│   ├── src/                     # Users, teams, transactions
+│   └── package.json
+│
+├── contracts/                   # TypeScript/Bun - Contract executor
+│   ├── src/                     # Deployment & execution
+│   └── package.json
+│
+├── cli/                         # TypeScript/Bun - Command-line tools
+│   ├── src/                     # User-facing commands
+│   └── package.json
+│
+├── website/                     # Astro/Svelte - Main website & playground
+│   └── src/
+│
+├── types/                       # Shared TypeScript type definitions
+│   ├── tana-core.d.ts
+│   ├── tana-data.d.ts
+│   └── tana-utils.d.ts
+│
+├── docs/                        # Documentation
+│   ├── DATA_STORAGE.md
+│   ├── FEATURE_PARITY.md
+│   └── STORAGE_*.md
+│
+├── TODO.md                      # Project roadmap & architecture
+├── docker-compose.yml           # All services orchestration
+└── package.json                 # Workspace management
+```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- [Bun](https://bun.sh) >= 1.0 (for TypeScript services)
+- [Rust](https://rustup.rs) >= 1.70 (for runtime only)
+- [Docker](https://docker.com) (optional, for databases)
+
+### Installation
 
 ```bash
-# Run the Rust CLI runtime
-cargo run
+# Install all dependencies
+bun install
 
-# Start the browser playground
-cd playground && npm run dev
-# Open http://localhost:4322/
+# Build Rust runtime
+cd runtime && cargo build --release && cd ..
+```
+
+### Development
+
+```bash
+# Start all services with Docker
+docker compose up
+
+# Or run services individually:
+bun run dev:ledger      # Account service (port 8080)
+bun run dev:contracts   # Contract executor (port 8081)
+bun run dev:node        # Blockchain node (port 9933)
+bun run dev:website     # Website (port 4322)
+bun run dev:runtime     # Rust runtime (CLI)
+
+# Or run all TypeScript services at once
+bun run dev
+```
+
+### Testing
+
+```bash
+# Run all tests
+bun test
+
+# Test specific service
+bun run --filter @tana/ledger test
+
+# Test Rust runtime
+cd runtime && cargo test
 ```
 
 ---
 
-## Overview
+## 🏗️ Service Overview
 
-Tana Runtime creates a secure sandbox for executing TypeScript smart contracts with:
+### Runtime (Rust)
+**Purpose:** Sandboxed V8 TypeScript execution engine
 
-1. **V8 JavaScript Engine** via deno_core
-2. **TypeScript Compiler** (typescript.js) - dynamically loads and transpiles
-3. **Custom Module System** - Virtual modules like `tana:core`, `tana:data`, `tana:utils`
-4. **Sandbox Isolation** - Hides Deno API, exposes only whitelisted functionality
-5. **Dual Environment Support** - Same code runs in both CLI runtime and browser playground
+- Execute smart contracts in isolated environment
+- Provide `tana:core`, `tana:data`, `tana:utils` APIs
+- No network access, filesystem, or system calls
+- Deterministic execution
 
----
+📖 [Full Runtime Documentation](./runtime/README.md)
 
-## Implemented Features
+### Node (TypeScript/Bun)
+**Purpose:** Blockchain node with P2P networking
 
-### ✅ Storage API (`tana:data`)
+- Block production & validation
+- P2P networking (libp2p)
+- JSON-RPC API
+- Consensus mechanism
 
-**Status: FEATURE PARITY ACHIEVED** - Works identically in both environments
+📖 [Node Documentation](./node/README.md)
 
-```typescript
-import { data } from 'tana:data'
+### Ledger (TypeScript/Bun)
+**Purpose:** Account and balance management
 
-// Set values (staged, not committed yet)
-await data.set('counter', 42)
-await data.set('user', { name: 'Alice', balance: 1000 })
+- User/Team account CRUD
+- Multi-currency balances
+- Transaction validation
+- REST API
 
-// Read values
-const count = await data.get('counter')  // 42
-const user = await data.get('user')      // { name: 'Alice', balance: 1000 }
+📖 [Ledger Documentation](./ledger/README.md)
 
-// Pattern matching
-await data.set('user:1:name', 'Bob')
-await data.set('user:2:name', 'Charlie')
-const userKeys = await data.keys('user:*')  // ['user:1:name', 'user:2:name']
+### Contracts (TypeScript/Bun)
+**Purpose:** Smart contract deployment & execution
 
-// Atomic commit (all or nothing)
-await data.commit()
+- Deploy contracts on-chain
+- Execute via runtime (subprocess or FFI)
+- Redis state storage
+- Gas metering
+
+📖 [Contracts Documentation](./contracts/README.md)
+
+### CLI (TypeScript/Bun)
+**Purpose:** Command-line tools for users
+
+```bash
+tana account create
+tana send @bob 10 USD
+tana deploy contract.ts
+tana call @contract/counter increment
 ```
 
-**Implementation:**
-- **Playground**: localStorage backend with full persistence
-- **Rust Runtime**: In-memory HashMap (works but resets each run)
-- **Planned**: Redis backend for production persistence
+📖 [CLI Documentation](./cli/README.md)
 
-**Storage Limits:**
-- Max key size: 256 bytes
-- Max value size: 10 KB
-- Max total size: 100 KB per contract
-- Max keys: 1000
+### Website (Astro/Svelte)
+**Purpose:** Main website & browser playground
 
-**Key Features:**
-- Staging buffer with atomic commits
-- Size validation before persistence
-- JSON auto-serialization
-- Glob pattern matching support
+- Interactive code editor (Monaco)
+- Run contracts in browser
+- Documentation
+- Block explorer (future)
 
-### ✅ Fetch API (`tana:utils`)
+---
 
-**Status: WORKING IN BOTH ENVIRONMENTS**
+## 📚 Documentation
 
-```typescript
-import { fetch } from 'tana:utils'
+- [TODO.md](./TODO.md) - Project roadmap and architecture decisions
+- [Data Storage](./docs/DATA_STORAGE.md) - Storage API design
+- [Feature Parity](./docs/FEATURE_PARITY.md) - Cross-environment compatibility
 
-// Whitelisted domains only
-const data = await fetch('https://pokeapi.co/api/v2/pokemon/ditto')
-console.log(data)
+---
+
+## 🔧 Development Workflow
+
+### Working on a Service
+
+```bash
+# Navigate to service
+cd ledger
+
+# Install dependencies (if needed)
+bun install
+
+# Run in development mode
+bun run dev
+
+# Run tests
+bun test
+
+# Build for production
+bun run build
 ```
 
-**Security:**
-- Domain whitelist: `pokeapi.co`, `tana.dev`, `localhost`, etc.
-- Rust: reqwest + tokio async runtime
-- Playground: browser fetch with same whitelist
+### Adding a New Dependency
 
-### ✅ Console API (`tana:core`)
+```bash
+# Add to specific service
+cd ledger
+bun add postgres
 
-**Status: WORKING IN BOTH ENVIRONMENTS**
+# Add to root (shared dev tools)
+cd ..
+bun add -D typescript
+```
 
-```typescript
-import { console } from 'tana:core'
+### Database Migrations
 
-console.log('Hello from Tana!')
-console.error('Error message')
+```bash
+# Ledger service (PostgreSQL)
+cd ledger
+bun run db:generate   # Generate migration
+bun run db:migrate    # Run migrations
 
-// Runtime version info
-import { version } from 'tana:core'
-console.log(version.tana)       // "0.1.0"
-console.log(version.deno_core)  // "0.338"
-console.log(version.v8)         // "13.2.281.5"
+# Contracts service (Redis)
+# No migrations needed - key-value store
 ```
 
 ---
 
-## Feature Parity Strategy
+## 🐳 Docker Setup
 
-**Dual Environment Support:**
+```bash
+# Start all services
+docker compose up
 
-1. **Rust CLI Runtime** (`cargo run`) - Production-ready V8 sandbox
-2. **Browser Playground** (Astro/Svelte web app) - Development/testing UI
+# Start in background
+docker compose up -d
 
-**Synchronization Points:**
-- `src/main.rs` - Rust ops definitions
-- `playground/src/pages/sandbox.astro` - JavaScript module implementations
-- `types/*.d.ts` - Shared TypeScript definitions
-- `playground/src/components/Editor.svelte` - Monaco type definitions
+# View logs
+docker compose logs -f
 
-**Rule:** If it's in the type definitions, it MUST work in BOTH environments.
+# Stop all services
+docker compose down
 
-See [FEATURE_PARITY.md](./FEATURE_PARITY.md) for detailed implementation strategy.
-
----
-
-## Architecture
-
-### Runtime Stack
-
-```
-┌─────────────────────────────────────┐
-│   TypeScript Smart Contracts        │
-├─────────────────────────────────────┤
-│   Virtual Modules (tana:core, etc)  │
-├─────────────────────────────────────┤
-│   TypeScript Compiler (typescript.js)│
-├─────────────────────────────────────┤
-│   Sandboxed V8 Runtime (deno_core)  │
-├─────────────────────────────────────┤
-│   Rust Runtime / Browser Playground │
-└─────────────────────────────────────┘
+# Reset everything (including volumes)
+docker compose down -v
 ```
 
-### Core Components
-
-- **src/main.rs** - Main Rust runtime entry point, defines ops and bootstraps V8
-- **src/lib.rs** - Library exports for WASM builds
-- **build.rs** - Extracts version metadata at compile time
-- **tana-globals.ts** - Bootstrap code that defines `globalThis.tana`
-- **typescript.js** - Embedded TypeScript compiler (bundled)
-
-### Execution Flow
-
-1. `main.rs` bootstraps V8 + deno_core runtime
-2. Loads `typescript.js` compiler into V8
-3. Injects `tana-globals.ts` and hides `Deno` API
-4. Registers virtual modules (`tana:core`, `tana:data`, etc.)
-5. Reads user script (e.g., `example.ts`)
-6. Transpiles TypeScript → JavaScript
-7. Executes in sandbox with isolated state
+**Services:**
+- `postgres` - PostgreSQL database (port 5432)
+- `redis` - Redis cache (port 6379)
+- `tana-ledger` - Ledger API (port 8080)
+- `tana-contracts` - Contracts API (port 8081)
+- `tana-node` - Node RPC (port 9933)
+- `tana-website` - Website (port 4322)
 
 ---
 
-## Ledger System Integration
-
-Tana Runtime is part of a larger ledger system that combines TypeScript smart contracts, PostgreSQL persistence, and a sandboxed runtime environment.
-
-### Data Model
-
-The ledger tracks **multi-currency balances**, deposits, withdrawals, and transactions using:
-- **Block batching** for efficient transaction processing
-- **Account-based validation** with state hashes
-- **Ed25519 signatures** for cryptographic verification
-- **Smart contracts** written in TypeScript as deterministic state machines
-
-Each contract is identified by a **code hash** and can be referenced by:
-- Friendly alias URLs: `tana.cash/@user/tx`
-- Full hash addresses: `tana.cash/@user/ab6bjk8hbvv6zzz…`
-
-### Database Schema
-
-Key tables supporting the ledger:
-
-- **`accounts`**: Multi-currency balances, metadata, versioned state hashes
-- **`transactions`**: Submitted transactions with contract hash references
-- **`blocks`**: Ordered, batched transactions with state root hashes
-- **`contracts`**: Code blobs and hashes of smart contracts
-- **`account_locks`**: Ensures single pending modification per account
-
----
-
-## File Structure
-
-### Core Runtime Files
-
-| File | Description |
-|------|-------------|
-| **src/main.rs** | Main entry point. Initializes `JsRuntime`, loads internal modules, defines ops |
-| **src/lib.rs** | Library exports for WASM builds |
-| **build.rs** | Build script extracting version info (Tana, Deno Core, V8) |
-| **Cargo.toml** | Rust dependencies and package configuration |
-| **typescript.js** | Embedded TypeScript compiler for `.ts` → `.js` transpilation |
-| **tana-globals.ts** | Bootstrap defining `globalThis.tana` and hiding `Deno` |
-
-### TypeScript & Type Definitions
-
-| File | Description |
-|------|-------------|
-| **types/tana.d.ts** | Type declarations for `tana` and `tana:core` module |
-| **types/tana-data.d.ts** | Type declarations for `tana:data` storage module |
-| **types/tana-utils.d.ts** | Type declarations for `tana:utils` utilities |
-| **tsconfig.json** | TypeScript config mapping `"tana:*"` paths to type definitions |
-
-### Example & Test Files
-
-| File | Description |
-|------|-------------|
-| **example.ts** | Example TypeScript program using `tana:core` |
-| **counter-test.ts** | Simple counter demonstrating storage API |
-| **test-storage.ts** | Comprehensive storage API tests |
-| **test-fetch.ts** | Fetch API tests |
-| **examples/counter-contract.ts** | Example smart contract |
-
-### Documentation
-
-| File | Description |
-|------|-------------|
-| **README.md** | This file - project overview and implementation status |
-| **DATA_STORAGE.md** | Storage API design, implementation plan, examples |
-| **FEATURE_PARITY.md** | Dual-environment strategy, API availability matrix |
-| **STORAGE_IMPLEMENTATION.md** | Implementation status, backend comparison, roadmap |
-| **STORAGE_QUICKSTART.md** | Quick start guide, API usage examples, test instructions |
-
----
-
-## Current Status
-
-### Working ✅
-
-- V8 runtime bootstrapping
-- TypeScript transpilation
-- Module system (`tana:core`, `tana:data`, `tana:utils`)
-- Storage API with staging + atomic commits
-- Fetch API with domain whitelist
-- Browser playground with Monaco editor
-- Feature parity between CLI and playground
-- JSON auto-serialization for storage
-- Glob pattern matching for keys
-
-### In Progress 🚧
-
-- Redis backend for persistent storage (Rust runtime)
-- Docker setup for database services
-- Blockchain integration (`tana:blockchain` module)
-- Data View tab in playground UI
-- Gas costs and storage rent model
-
-### Planned 📋
-
-- PostgreSQL integration for ledger state
-- Ed25519 signature verification
-- Block batching and Merkle proofs
-- Multi-currency account system
-- Contract deployment and versioning
-- API endpoints for network access
-
----
-
-## Technical Stack
-
-### Rust Dependencies
-
-```toml
-deno_core = "0.338"          # V8 runtime
-deno_error = "0.5.7"         # Error handling
-reqwest = "0.12"             # HTTP client
-tokio = "1"                  # Async runtime
-redis = "0.27"               # Database client (added, not yet used)
-serde_json = "1.0"           # JSON handling
-wasm-bindgen = "0.2"         # WASM support
-```
-
-### Web Playground Stack
-
-- **Astro** - Web framework
-- **Svelte** - UI components
-- **Monaco Editor** - Code editor with TypeScript autocomplete
-- **localStorage** - Storage backend for `tana:data`
-
----
-
-## Example Smart Contract
+## 🧪 Example Smart Contract
 
 ```typescript
 import { console } from 'tana:core'
 import { data } from 'tana:data'
 
-// Simple token transfer contract
-async function transfer(from: string, to: string, amount: number) {
-  // Read current balances
-  const fromBalance = parseInt((await data.get(`balance:${from}`)) as string)
-  const toBalance = parseInt((await data.get(`balance:${to}`)) as string)
+// Simple counter contract
+const current = await data.get('counter')
+const count = current ? parseInt(current) : 0
 
-  // Validate
-  if (fromBalance < amount) {
-    throw new Error('Insufficient balance')
-  }
+console.log('Current count:', count)
 
-  // Update balances
-  await data.set(`balance:${from}`, String(fromBalance - amount))
-  await data.set(`balance:${to}`, String(toBalance + amount))
-
-  // Commit atomically (both balances updated or neither)
-  await data.commit()
-
-  console.log(`Transferred ${amount} from ${from} to ${to}`)
-}
-
-// Initialize balances
-await data.set('balance:alice', '1000')
-await data.set('balance:bob', '500')
+await data.set('counter', String(count + 1))
 await data.commit()
 
-// Execute transfer
-await transfer('alice', 'bob', 200)
-
-// Check new balances
-console.log('Alice:', await data.get('balance:alice'))  // '800'
-console.log('Bob:', await data.get('balance:bob'))      // '700'
+console.log('Counter incremented!')
 ```
 
----
-
-## Testing
-
-### CLI Runtime
+**Run it:**
 
 ```bash
-# Run example script
-cargo run
+# Via CLI
+tana deploy examples/counter.ts
 
-# Run specific test
-cargo run counter-test.ts
-cargo run test-storage.ts
+# Via Rust runtime
+cd runtime
+cargo run -- example.ts
+
+# Via browser playground
+open http://localhost:4322
 ```
 
-### Browser Playground
+---
 
-```bash
-cd playground
-npm install
-npm run dev
-```
+## 🤝 Contributing
 
-Open http://localhost:4322/ and use the Monaco editor to write and run TypeScript contracts.
+This is an experimental project. Contributions welcome!
 
-**Inspect Storage:**
-1. Open Browser DevTools (F12)
-2. Go to **Application > Local Storage**
-3. Look for keys starting with `tana:data:`
+1. Pick an issue or feature from [TODO.md](./TODO.md)
+2. Create a branch
+3. Make changes and test
+4. Submit a PR
 
 ---
 
-## Next Steps
+## 📝 License
 
-1. **Redis Integration** - Add persistent storage backend to Rust runtime
-2. **Docker Compose** - Setup Redis + PostgreSQL services
-3. **Data View Tab** - Add UI to visualize storage in playground
-4. **Blockchain Module** - Implement `tana:blockchain` API
-5. **Gas Costs** - Add metering for storage operations
-6. **Contract Deployment** - Support uploading and versioning contracts
+MIT (or your chosen license)
 
 ---
 
-## Notes
+## 🔗 Links
 
-- `globalThis.Deno` is deleted to ensure true sandbox isolation
-- The current module system will be replaced by a Rust `ModuleLoader`
-- Storage limits prevent abuse (similar to Ethereum gas model)
-- Same TypeScript code runs in CLI and browser playground
-- Contracts are deterministic state machines identified by code hash
+- [Architecture & Roadmap](./TODO.md)
+- [Runtime Documentation](./runtime/README.md)
+- [Data Storage Design](./docs/DATA_STORAGE.md)
 
 ---
+
+**Status:** Early development - Not production ready
+
+Built with Rust (deno_core), TypeScript, Bun, PostgreSQL, Redis, and Astro.

@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tana
+      POSTGRES_USER: tana
+      POSTGRES_PASSWORD: tana_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tana"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Tana Services
+  tana-ledger:
+    build:
+      context: ./ledger
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://tana:tana_dev_password@postgres:5432/tana
+      NODE_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./ledger:/app
+      - /app/node_modules
+    command: bun run dev
+
+  tana-contracts:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://tana:tana_dev_password@postgres:5432/tana
+      RUNTIME_PATH: /runtime/target/release/tana-runtime
+      NODE_ENV: development
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./contracts:/app
+      - ./runtime:/runtime
+      - /app/node_modules
+    command: bun run dev
+
+  tana-node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    ports:
+      - "9933:9933"   # JSON-RPC
+      - "30333:30333" # P2P
+    environment:
+      PORT: 9933
+      P2P_PORT: 30333
+      DATABASE_URL: postgres://tana:tana_dev_password@postgres:5432/tana
+      LEDGER_URL: http://tana-ledger:8080
+      CONTRACTS_URL: http://tana-contracts:8081
+      NODE_ENV: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tana-ledger:
+        condition: service_started
+      tana-contracts:
+        condition: service_started
+    volumes:
+      - ./node:/app
+      - /app/node_modules
+    command: bun run dev
+
+  tana-website:
+    build:
+      context: ./website
+      dockerfile: Dockerfile
+    ports:
+      - "4322:4322"
+    environment:
+      NODE_ENV: development
+      API_URL: http://tana-node:9933
+    volumes:
+      - ./website:/app
+      - /app/node_modules
+    command: bun run dev
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: tana-network

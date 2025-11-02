@@ -1,0 +1,21 @@
+{
+  "name": "@tana/contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tana contract executor - Deploy and execute TypeScript smart contracts",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "redis": "^4.6.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
