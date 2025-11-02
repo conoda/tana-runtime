@@ -356,7 +356,7 @@
     <iframe
       bind:this={sandboxIframe}
       src="/sandbox"
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-same-origin"
       title="Tana Sandbox"
       class="sandbox-iframe"
     ></iframe>

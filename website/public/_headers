@@ -19,4 +19,4 @@
 
 /sandbox
   # Stricter CSP for sandbox page - no external resources except whitelisted fetch domains
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src https://pokeapi.co https://*.tana.dev https://tana.network; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src https://pokeapi.co https://*.tana.dev https://tana.network https://*.pages.dev; frame-ancestors 'self'
