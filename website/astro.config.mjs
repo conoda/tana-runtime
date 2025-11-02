@@ -1,12 +1,12 @@
 import { defineConfig } from 'astro/config';
 import svelte from '@astrojs/svelte';
 import tailwindcss from '@tailwindcss/vite';
-
 import cloudflare from '@astrojs/cloudflare';
 
 export default defineConfig({
   integrations: [svelte()],
-  output: 'static',
+  output: 'server',  // SSR mode, but specific pages can be prerendered with `export const prerender = true`
+  adapter: cloudflare(),
 
   build: {
     inlineStylesheets: 'auto'
@@ -14,7 +14,5 @@ export default defineConfig({
 
   vite: {
     plugins: [tailwindcss()]
-  },
-
-  adapter: cloudflare()
+  }
 });

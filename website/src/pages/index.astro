@@ -1,7 +1,9 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Editor from '../components/Editor.svelte';
-import '../styles/global.css' 
+import '../styles/global.css';
+
+export const prerender = true;  // prerender homepage as static
 ---
 
 <BaseLayout>

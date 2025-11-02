@@ -3,8 +3,7 @@
 	"name": "tana-website",
   "compatibility_date": "2025-11-01",
   "compatibility_flags": [
-    "nodejs_compat",
-    "global_fetch_strictly_public"
+    "nodejs_compat"
   ],
 	"assets": {
 		"binding": "ASSETS",
