@@ -152,6 +152,13 @@ export async function validateTransaction(input: CreateTransactionInput): Promis
 }
 
 /**
+ * Get all transactions
+ */
+export async function getAllTransactions(limit = 100, offset = 0) {
+  return await db.select().from(transactions).limit(limit).offset(offset)
+}
+
+/**
  * List all pending transactions
  */
 export async function getPendingTransactions(limit = 100) {

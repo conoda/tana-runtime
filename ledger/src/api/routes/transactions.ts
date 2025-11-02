@@ -9,6 +9,15 @@ import { createTransactionSchema, confirmTransactionSchema } from '../schemas'
 
 const app = new Hono()
 
+// GET /transactions - Get all transactions
+app.get('/', async (c) => {
+  const limit = parseInt(c.req.query('limit') || '100')
+  const offset = parseInt(c.req.query('offset') || '0')
+
+  const transactions = await transactionService.getAllTransactions(limit, offset)
+  return c.json(transactions)
+})
+
 // POST /transactions - Create new transaction
 app.post('/', zValidator('json', createTransactionSchema), async (c) => {
   const body = c.req.valid('json')
