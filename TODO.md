@@ -20,25 +20,36 @@ A **blockchain ledger system** that:
 
 ### Q1: What Actually Goes On-Chain?
 
+**Philosophy:** Keep everything **deterministic, versioned, and immutable** on-chain. This blockchain is a permanent, verifiable record.
+
 **YES - Stored on Blockchain:**
 - ✅ User accounts (ID, metadata, public key)
-- ✅ Team memberships
-- ✅ Channel definitions
+- ✅ Team memberships and roles
+- ✅ Channel definitions and messages
 - ✅ Account balances (multi-currency ledger)
 - ✅ Transactions (with signatures)
-- ✅ Smart contract code (hashed and stored)
+- ✅ Smart contract source code (TypeScript)
+- ✅ Smart contract compiled output (JavaScript)
 - ✅ Smart contract state (key-value data)
+- ✅ Landing page code (HTML/CSS/JS - full source)
+- ✅ Deployed application code (deterministic builds)
 - ✅ Block headers (Merkle roots, timestamps)
+- ✅ Configuration and metadata
 
-**NO - Off-Chain (Database/Cache):**
-- ❌ Large media files (IPFS/CDN instead)
-- ❌ Rendered HTML (generated on-demand)
-- ❌ Temporary session data
-- ❌ Search indexes (PostgreSQL)
+**NO - Off-Chain (Ephemeral/Cached Only):**
+- ❌ Temporary session tokens
+- ❌ Search indexes (rebuilt from on-chain data)
+- ❌ Cached rendered pages (regenerated on-demand)
+- ❌ Rate limiting state
+- ❌ Analytics and logs
 
-**Hybrid (Hash on-chain, data off-chain):**
-- 🔀 Landing page code (hash on-chain, HTML in IPFS/storage)
-- 🔀 Profile images (hash on-chain, image in CDN)
+**MAYBE - Depends on Size:**
+- 🤔 Large media files (images, videos)
+  - **Small assets** (<100KB): Store on-chain with content hash
+  - **Large assets** (>100KB): Store hash on-chain, content in IPFS/Arweave
+- 🤔 User-uploaded content
+  - Profile avatars: Content-addressed, optional off-chain storage
+  - Channel attachments: Hash on-chain, content off-chain if large
 
 ---
 
@@ -55,8 +66,9 @@ interface User {
   displayName: string           // "Alice Johnson"
   metadata: {
     bio?: string
-    avatar?: string             // IPFS hash
-    landingPageCode?: string    // Hash of deployed code
+    avatarData?: string         // Small image stored on-chain (<100KB base64)
+    avatarHash?: string         // Or content hash if stored off-chain
+    landingPageId?: string      // Reference to LandingPage object
   }
   balances: Map<Currency, Decimal>  // Multi-currency
   createdAt: timestamp
@@ -76,8 +88,8 @@ interface Team {
   balances: Map<Currency, Decimal>  // Team treasury
   metadata: {
     description?: string
-    avatar?: string
-    landingPageCode?: string
+    avatarData?: string         // Small image on-chain or content hash
+    landingPageId?: string      // Reference to LandingPage object
   }
   createdAt: timestamp
 }
@@ -99,7 +111,7 @@ interface Channel {
   }>
   metadata: {
     description?: string
-    landingPageCode?: string
+    landingPageId?: string      // Reference to LandingPage object
   }
   createdAt: timestamp
 }
@@ -145,15 +157,36 @@ interface SmartContract {
 
 // 7. LANDING PAGE (Deployed Code)
 interface LandingPage {
+  id: string                    // Page ID (content hash)
   owner: string                 // User/Team/Channel ID
-  codeHash: string              // Hash of HTML/TS
-  staticHTML: string            // Base template
-  islandComponents: Array<{     // Dynamic islands
-    id: string
-    contractId: string          // Smart contract for data
-    position: string            // CSS selector
+  version: number               // Deployment version
+
+  // Full code stored on-chain (deterministic, immutable)
+  sourceCode: {
+    html: string                // Full HTML source
+    css: string                 // Styles
+    typescript?: string         // Optional TypeScript for islands
+    compiledJS?: string         // Compiled JavaScript output
+  }
+
+  // Island architecture (dynamic components)
+  islands: Array<{
+    id: string                  // Island identifier
+    contractId: string          // Smart contract for data/logic
+    selector: string            // CSS selector for mount point
+    props?: Record<string, any> // Static props
   }>
+
+  // Metadata
+  metadata: {
+    title?: string
+    description?: string
+    customDomain?: string       // Optional custom domain
+    buildHash: string           // Hash of compiled output
+  }
+
   deployedAt: timestamp
+  deployedBy: string            // User ID who deployed
 }
 
 // 8. BLOCK
@@ -167,6 +200,52 @@ interface Block {
   validatorSignature: string    // Block producer signature
 }
 ```
+
+---
+
+## 💡 On-Chain Storage Philosophy
+
+### Why Store Compiled Assets On-Chain?
+
+**Benefits:**
+1. **Deterministic Builds** - Anyone can verify the exact code that was deployed
+2. **Immutable Versioning** - Full history of all deployments, forever
+3. **No External Dependencies** - No IPFS gateways, CDNs, or third-party services
+4. **Provable Execution** - The code that runs is exactly what's in the block
+5. **Time-Travel Debugging** - View any page as it existed at any block height
+6. **Censorship Resistance** - Code can't be taken down or modified
+7. **Trustless Verification** - Users can inspect code before interacting
+
+**Trade-offs:**
+- ⚠️ **Storage Cost**: Blockchain storage is expensive (but necessary for guarantees)
+- ⚠️ **Chain Bloat**: Large deployments increase blockchain size
+- ✅ **Mitigation**: Size limits per deployment, compression, deduplication
+
+### Storage Strategy
+
+```typescript
+// Example: Landing page deployment
+{
+  html: "<html>...</html>",           // ~5-50 KB
+  css: "body { ... }",                // ~10-100 KB
+  typescript: "import { data }...",   // ~5-50 KB
+  compiledJS: "const data = ...",     // ~10-100 KB
+}
+
+// Total per deployment: ~30-300 KB
+// Reasonable for blockchain storage
+```
+
+**Size Limits (Proposed):**
+- Single deployment: Max 500 KB total
+- Smart contract code: Max 100 KB
+- Images (on-chain): Max 100 KB per asset
+- Messages: Max 10 KB per message
+
+**Compression:**
+- Store code with gzip compression
+- Decompress on retrieval for execution
+- Reference previous versions (delta compression)
 
 ---
 
