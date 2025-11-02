@@ -13,7 +13,7 @@ procs:
   # Core Services
   ledger:
     cwd: ./ledger
-    shell: "DATABASE_URL='postgres://tana:tana_dev_password@localhost:5432/tana' bun run dev"
+    shell: "bun run dev"
     autostart: true
     env:
       DATABASE_URL: "postgres://tana:tana_dev_password@localhost:5432/tana"

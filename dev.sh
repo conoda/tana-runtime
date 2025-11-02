@@ -16,4 +16,7 @@ echo ""
 echo "Press Ctrl+A then Q to quit all processes"
 echo ""
 
+# Unset global DATABASE_URL to prevent conflicts with per-service configs
+unset DATABASE_URL
+
 mprocs
