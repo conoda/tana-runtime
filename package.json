@@ -1,0 +1,39 @@
+{
+  "name": "tana-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tana blockchain - Monorepo for all services",
+  "workspaces": [
+    "node",
+    "ledger",
+    "contracts",
+    "cli",
+    "website"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:node": "bun run --filter @tana/node dev",
+    "dev:ledger": "bun run --filter @tana/ledger dev",
+    "dev:contracts": "bun run --filter @tana/contracts dev",
+    "dev:cli": "bun run --filter @tana/cli dev",
+    "dev:website": "bun run --filter @tana/website dev",
+    "dev:runtime": "cd runtime && cargo run",
+    "build": "bun run --filter '*' build",
+    "build:runtime": "cd runtime && cargo build --release",
+    "test": "bun run --filter '*' test",
+    "test:runtime": "cd runtime && cargo test",
+    "clean": "rm -rf node_modules */node_modules */dist runtime/target",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "install:all": "bun install && cd runtime && cargo build"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.0.0",
+    "node": ">=20.0.0"
+  }
+}

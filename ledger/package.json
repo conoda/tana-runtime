@@ -1,0 +1,26 @@
+{
+  "name": "@tana/ledger",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tana ledger service - User accounts, balances, and transactions",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "postgres": "^3.4.0",
+    "drizzle-orm": "^0.30.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.20.0"
+  }
+}
