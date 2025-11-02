@@ -352,7 +352,7 @@
   <div bind:this={resizerElem} class="resizer"></div>
 
   <!-- Output Panel -->
-  <div class="output-panel">
+  <div bind:this={outputContainer} class="output-panel">
     <iframe
       bind:this={sandboxIframe}
       src="/sandbox"
