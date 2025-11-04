@@ -112,19 +112,13 @@
             target: monaco.languages.typescript.ScriptTarget.ES2020,
             module: monaco.languages.typescript.ModuleKind.ESNext,
             moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-            // Include all necessary type libraries
-            lib: [
-              'ES2015',
-              'ES2016',
-              'ES2017',
-              'ES2018',
-              'ES2019',
-              'ES2020',
-              'ESNext'
-            ],
+            // Include all necessary type libraries (lowercase format for Monaco)
+            lib: ['es2020', 'dom'],
             allowNonTsExtensions: true,
             noSemanticValidation: false,
-            noSyntaxValidation: false
+            noSyntaxValidation: false,
+            strictNullChecks: false,
+            strictFunctionTypes: false
           });
 
           // Add tana:core type definitions to Monaco
@@ -194,6 +188,144 @@
             'ts:filename/tana-data.d.ts'
           );
 
+          // Add tana:block type definitions to Monaco
+          monaco.languages.typescript.typescriptDefaults.addExtraLib(
+            `declare module 'tana:block' {
+              export const block: {
+                /** Current block height/number */
+                readonly height: number;
+                /** Unix timestamp in milliseconds */
+                readonly timestamp: number;
+                /** Current block hash (hex string) */
+                readonly hash: string;
+                /** Previous block hash (hex string) */
+                readonly previousHash: string;
+                /** User ID executing this contract */
+                readonly executor: string;
+                /** This contract's ID */
+                readonly contractId: string;
+                /** Maximum execution units allowed */
+                readonly gasLimit: number;
+                /** Current gas consumed */
+                readonly gasUsed: number;
+                /** Maximum items per batch query */
+                readonly MAX_BATCH_QUERY: 10;
+
+                /**
+                 * Get balance for user(s)/team(s) as of current block
+                 * @param userIds Single user ID or array of up to 10 user IDs
+                 * @param currencyCode Currency code (e.g., 'USD', 'BTC')
+                 * @returns Single balance or array of balances
+                 * @throws Error if querying more than MAX_BATCH_QUERY items
+                 */
+                getBalance(userIds: string, currencyCode: string): Promise<number>;
+                getBalance(userIds: string[], currencyCode: string): Promise<number[]>;
+
+                /**
+                 * Get user information as of current block
+                 * @param userIds Single user ID/username or array of up to 10 IDs
+                 * @returns Single user object or array of user objects (null if not found)
+                 * @throws Error if querying more than MAX_BATCH_QUERY items
+                 */
+                getUser(userIds: string): Promise<User | null>;
+                getUser(userIds: string[]): Promise<(User | null)[]>;
+
+                /**
+                 * Get transaction by ID
+                 * @param txIds Single transaction ID or array of up to 10 IDs
+                 * @returns Single transaction or array of transactions (null if not found)
+                 * @throws Error if querying more than MAX_BATCH_QUERY items
+                 */
+                getTransaction(txIds: string): Promise<Transaction | null>;
+                getTransaction(txIds: string[]): Promise<(Transaction | null)[]>;
+              };
+
+              interface User {
+                id: string;
+                username: string;
+                displayName: string;
+                publicKey: string;
+                bio?: string;
+                createdAt: string;
+              }
+
+              interface Balance {
+                ownerId: string;
+                ownerType: 'user' | 'team';
+                currencyCode: string;
+                amount: string;
+                updatedAt: string;
+              }
+
+              interface Transaction {
+                id: string;
+                fromId: string;
+                toId: string;
+                amount: string;
+                currencyCode: string;
+                type: 'transfer' | 'deposit' | 'withdrawal';
+                status: 'pending' | 'confirmed' | 'failed';
+                createdAt: string;
+              }
+            }`,
+            'ts:filename/tana-block.d.ts'
+          );
+
+          // Add tana:tx type definitions to Monaco
+          monaco.languages.typescript.typescriptDefaults.addExtraLib(
+            `declare module 'tana:tx' {
+              interface TransactionChange {
+                type: 'transfer' | 'balance_update' | 'data_update';
+                from?: string;
+                to?: string;
+                amount?: number;
+                currency?: string;
+                userId?: string;
+                key?: string;
+                value?: any;
+              }
+
+              interface TransactionResult {
+                success: boolean;
+                changes: TransactionChange[];
+                gasUsed: number;
+                error: string | null;
+              }
+
+              export const tx: {
+                /**
+                 * Propose a balance transfer between two accounts
+                 * @param from Source user/team ID
+                 * @param to Destination user/team ID
+                 * @param amount Amount to transfer (must be positive)
+                 * @param currency Currency code (e.g., 'USD', 'BTC')
+                 */
+                transfer(from: string, to: string, amount: number, currency: string): void;
+
+                /**
+                 * Propose a balance update for an account
+                 * @param userId User/team ID
+                 * @param amount New balance (must be non-negative)
+                 * @param currency Currency code
+                 */
+                setBalance(userId: string, amount: number, currency: string): void;
+
+                /**
+                 * Get all proposed changes (read-only)
+                 * @returns Array of pending transaction changes
+                 */
+                getChanges(): Array<TransactionChange>;
+
+                /**
+                 * Validate and execute all proposed changes atomically
+                 * @returns Transaction result with success status and gas usage
+                 */
+                execute(): Promise<TransactionResult>;
+              };
+            }`,
+            'ts:filename/tana-tx.d.ts'
+          );
+
           // Add standard JavaScript globals (explicit declarations for sandboxed environment)
           monaco.languages.typescript.typescriptDefaults.addExtraLib(
             `
@@ -203,8 +335,49 @@
             declare function isNaN(number: number): boolean;
             declare function isFinite(number: number): boolean;
 
-            // Standard constructor types are already in ES2020 lib:
-            // String, Number, Boolean, Date, Math, JSON, Array, Object, etc.
+            // Standard Date constructor and methods
+            interface Date {
+              toString(): string;
+              toDateString(): string;
+              toTimeString(): string;
+              toLocaleString(): string;
+              toLocaleDateString(): string;
+              toLocaleTimeString(): string;
+              valueOf(): number;
+              getTime(): number;
+              getFullYear(): number;
+              getUTCFullYear(): number;
+              getMonth(): number;
+              getUTCMonth(): number;
+              getDate(): number;
+              getUTCDate(): number;
+              getDay(): number;
+              getUTCDay(): number;
+              getHours(): number;
+              getUTCHours(): number;
+              getMinutes(): number;
+              getUTCMinutes(): number;
+              getSeconds(): number;
+              getUTCSeconds(): number;
+              getMilliseconds(): number;
+              getUTCMilliseconds(): number;
+              getTimezoneOffset(): number;
+              toISOString(): string;
+              toJSON(key?: any): string;
+            }
+
+            interface DateConstructor {
+              new(): Date;
+              new(value: number | string): Date;
+              new(year: number, month: number, date?: number, hours?: number, minutes?: number, seconds?: number, ms?: number): Date;
+              (): string;
+              readonly prototype: Date;
+              parse(s: string): number;
+              UTC(year: number, month: number, date?: number, hours?: number, minutes?: number, seconds?: number, ms?: number): number;
+              now(): number;
+            }
+
+            declare var Date: DateConstructor;
             `,
             'ts:filename/globals.d.ts'
           );

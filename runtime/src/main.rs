@@ -24,6 +24,19 @@ const MAX_VALUE_SIZE: usize = 10_240;  // 10 KB
 const MAX_TOTAL_SIZE: usize = 102_400; // 100 KB
 const MAX_KEYS: usize = 1000;
 
+// Transaction staging (for tana:tx module)
+static TX_CHANGES: Mutex<Option<Vec<serde_json::Value>>> = Mutex::new(None);
+
+// Mock block context (in production, this comes from blockchain DB)
+const MOCK_BLOCK_HEIGHT: u64 = 12345;
+const MOCK_EXECUTOR: &str = "user_rust_runtime";
+const MOCK_CONTRACT_ID: &str = "contract_rust";
+const MOCK_GAS_LIMIT: u64 = 1_000_000;
+static MOCK_GAS_USED: Mutex<u64> = Mutex::new(0);
+
+// Query limits (anti-abuse)
+const MAX_BATCH_QUERY: usize = 10;
+
 #[op2]
 fn op_sum(#[serde] nums: Vec<f64>) -> Result<f64, deno_error::JsErrorBox> {
     Ok(nums.iter().sum())
@@ -296,6 +309,332 @@ fn op_data_commit() -> Result<(), deno_error::JsErrorBox> {
     Ok(())
 }
 
+// ========== Block Context Ops ==========
+
+#[op2(fast)]
+#[bigint]
+fn op_block_get_height() -> u64 {
+    MOCK_BLOCK_HEIGHT
+}
+
+#[op2(fast)]
+fn op_block_get_timestamp() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as f64
+}
+
+#[op2]
+#[string]
+fn op_block_get_hash() -> String {
+    // Generate a mock hash (in production, this comes from blockchain)
+    format!("0x{:x}", MOCK_BLOCK_HEIGHT)
+}
+
+#[op2]
+#[string]
+fn op_block_get_previous_hash() -> String {
+    // Generate a mock previous hash
+    format!("0x{:x}", MOCK_BLOCK_HEIGHT - 1)
+}
+
+#[op2]
+#[string]
+fn op_block_get_executor() -> String {
+    MOCK_EXECUTOR.to_string()
+}
+
+#[op2]
+#[string]
+fn op_block_get_contract_id() -> String {
+    MOCK_CONTRACT_ID.to_string()
+}
+
+#[op2(fast)]
+#[bigint]
+fn op_block_get_gas_limit() -> u64 {
+    MOCK_GAS_LIMIT
+}
+
+#[op2(fast)]
+#[bigint]
+fn op_block_get_gas_used() -> u64 {
+    *MOCK_GAS_USED.lock().unwrap()
+}
+
+// ========== Blockchain State Query Ops ==========
+
+#[op2(async)]
+#[serde]
+async fn op_block_get_balance(
+    #[serde] user_ids: serde_json::Value,
+    #[string] currency_code: String
+) -> Result<serde_json::Value, deno_error::JsErrorBox> {
+    // Parse input (string or array)
+    let ids: Vec<String> = match user_ids {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(arr) => {
+            arr.into_iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        },
+        _ => return Err(deno_error::JsErrorBox::new("TypeError", "Invalid user_ids")),
+    };
+
+    // Check batch limit
+    if ids.len() > MAX_BATCH_QUERY {
+        return Err(deno_error::JsErrorBox::new(
+            "Error",
+            format!("Cannot query more than {} balances at once", MAX_BATCH_QUERY)
+        ));
+    }
+
+    // Fetch from ledger API
+    let url = "http://localhost:8080/balances";
+    let response = reqwest::get(url).await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to fetch balances: {}", e)))?;
+
+    let balances: Vec<serde_json::Value> = response.json().await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to parse balances: {}", e)))?;
+
+    // Find balances for each user
+    let results: Vec<f64> = ids.iter().map(|user_id| {
+        balances.iter()
+            .find(|b| {
+                b.get("ownerId").and_then(|v| v.as_str()) == Some(user_id) &&
+                b.get("currencyCode").and_then(|v| v.as_str()) == Some(&currency_code)
+            })
+            .and_then(|b| b.get("amount"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    }).collect();
+
+    // Return single value or array based on input
+    if ids.len() == 1 {
+        Ok(serde_json::json!(results[0]))
+    } else {
+        Ok(serde_json::json!(results))
+    }
+}
+
+#[op2(async)]
+#[serde]
+async fn op_block_get_user(
+    #[serde] user_ids: serde_json::Value
+) -> Result<serde_json::Value, deno_error::JsErrorBox> {
+    // Parse input (string or array)
+    let ids: Vec<String> = match user_ids {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(arr) => {
+            arr.into_iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        },
+        _ => return Err(deno_error::JsErrorBox::new("TypeError", "Invalid user_ids")),
+    };
+
+    // Check batch limit
+    if ids.len() > MAX_BATCH_QUERY {
+        return Err(deno_error::JsErrorBox::new(
+            "Error",
+            format!("Cannot query more than {} users at once", MAX_BATCH_QUERY)
+        ));
+    }
+
+    // Fetch from ledger API
+    let url = "http://localhost:8080/users";
+    let response = reqwest::get(url).await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to fetch users: {}", e)))?;
+
+    let users: Vec<serde_json::Value> = response.json().await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to parse users: {}", e)))?;
+
+    // Find users by id or username
+    let results: Vec<Option<serde_json::Value>> = ids.iter().map(|user_id| {
+        users.iter()
+            .find(|u| {
+                u.get("id").and_then(|v| v.as_str()) == Some(user_id) ||
+                u.get("username").and_then(|v| v.as_str()) == Some(user_id)
+            })
+            .cloned()
+    }).collect();
+
+    // Return single value or array based on input
+    if ids.len() == 1 {
+        Ok(results[0].clone().unwrap_or(serde_json::Value::Null))
+    } else {
+        Ok(serde_json::json!(results))
+    }
+}
+
+#[op2(async)]
+#[serde]
+async fn op_block_get_transaction(
+    #[serde] tx_ids: serde_json::Value
+) -> Result<serde_json::Value, deno_error::JsErrorBox> {
+    // Parse input (string or array)
+    let ids: Vec<String> = match tx_ids {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(arr) => {
+            arr.into_iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        },
+        _ => return Err(deno_error::JsErrorBox::new("TypeError", "Invalid tx_ids")),
+    };
+
+    // Check batch limit
+    if ids.len() > MAX_BATCH_QUERY {
+        return Err(deno_error::JsErrorBox::new(
+            "Error",
+            format!("Cannot query more than {} transactions at once", MAX_BATCH_QUERY)
+        ));
+    }
+
+    // Fetch from ledger API
+    let url = "http://localhost:8080/transactions";
+    let response = reqwest::get(url).await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to fetch transactions: {}", e)))?;
+
+    let transactions: Vec<serde_json::Value> = response.json().await
+        .map_err(|e| deno_error::JsErrorBox::new("Error", format!("Failed to parse transactions: {}", e)))?;
+
+    // Find transactions by id
+    let results: Vec<Option<serde_json::Value>> = ids.iter().map(|tx_id| {
+        transactions.iter()
+            .find(|tx| tx.get("id").and_then(|v| v.as_str()) == Some(tx_id))
+            .cloned()
+    }).collect();
+
+    // Return single value or array based on input
+    if ids.len() == 1 {
+        Ok(results[0].clone().unwrap_or(serde_json::Value::Null))
+    } else {
+        Ok(serde_json::json!(results))
+    }
+}
+
+// ========== Transaction Staging Ops ==========
+
+#[op2(fast)]
+fn op_tx_transfer(
+    #[string] from: String,
+    #[string] to: String,
+    amount: f64,
+    #[string] currency: String
+) -> Result<(), deno_error::JsErrorBox> {
+    if from == to {
+        return Err(deno_error::JsErrorBox::new("Error", "Cannot transfer to self"));
+    }
+    if amount <= 0.0 {
+        return Err(deno_error::JsErrorBox::new("Error", "Amount must be positive"));
+    }
+
+    let mut changes = TX_CHANGES.lock().unwrap();
+    if changes.is_none() {
+        *changes = Some(Vec::new());
+    }
+
+    let change = serde_json::json!({
+        "type": "transfer",
+        "from": from,
+        "to": to,
+        "amount": amount,
+        "currency": currency
+    });
+
+    changes.as_mut().unwrap().push(change);
+    Ok(())
+}
+
+#[op2(fast)]
+fn op_tx_set_balance(
+    #[string] user_id: String,
+    amount: f64,
+    #[string] currency: String
+) -> Result<(), deno_error::JsErrorBox> {
+    if amount < 0.0 {
+        return Err(deno_error::JsErrorBox::new("Error", "Balance cannot be negative"));
+    }
+
+    let mut changes = TX_CHANGES.lock().unwrap();
+    if changes.is_none() {
+        *changes = Some(Vec::new());
+    }
+
+    let change = serde_json::json!({
+        "type": "balance_update",
+        "userId": user_id,
+        "amount": amount,
+        "currency": currency
+    });
+
+    changes.as_mut().unwrap().push(change);
+    Ok(())
+}
+
+#[op2]
+#[serde]
+fn op_tx_get_changes() -> serde_json::Value {
+    let changes = TX_CHANGES.lock().unwrap();
+    if let Some(ref changes) = *changes {
+        serde_json::Value::Array(changes.clone())
+    } else {
+        serde_json::Value::Array(Vec::new())
+    }
+}
+
+#[op2]
+#[serde]
+fn op_tx_execute() -> Result<serde_json::Value, deno_error::JsErrorBox> {
+    let mut changes_guard = TX_CHANGES.lock().unwrap();
+    if changes_guard.is_none() {
+        *changes_guard = Some(Vec::new());
+    }
+
+    let changes = changes_guard.as_ref().unwrap().clone();
+    let gas_used = 100 * changes.len() as u64;
+
+    // Update global gas used
+    let mut global_gas = MOCK_GAS_USED.lock().unwrap();
+    let new_gas_total = *global_gas + gas_used;
+
+    // Check gas limit
+    if new_gas_total > MOCK_GAS_LIMIT {
+        // Rollback
+        if let Some(ref mut c) = *changes_guard {
+            c.clear();
+        }
+        return Ok(serde_json::json!({
+            "success": false,
+            "changes": [],
+            "gasUsed": MOCK_GAS_LIMIT,
+            "error": "Out of gas"
+        }));
+    }
+
+    // Update gas used
+    *global_gas = new_gas_total;
+
+    // In playground: just return success
+    // In production: validate and persist to DB
+
+    // Clear staging
+    if let Some(ref mut c) = *changes_guard {
+        c.clear();
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "changes": changes,
+        "gasUsed": gas_used,
+        "error": null
+    }))
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     // 1) expose our ops
@@ -310,6 +649,27 @@ async fn main() {
     const OP_DATA_CLEAR: deno_core::OpDecl = op_data_clear();
     const OP_DATA_COMMIT: deno_core::OpDecl = op_data_commit();
 
+    // Block context ops
+    const OP_BLOCK_GET_HEIGHT: deno_core::OpDecl = op_block_get_height();
+    const OP_BLOCK_GET_TIMESTAMP: deno_core::OpDecl = op_block_get_timestamp();
+    const OP_BLOCK_GET_HASH: deno_core::OpDecl = op_block_get_hash();
+    const OP_BLOCK_GET_PREVIOUS_HASH: deno_core::OpDecl = op_block_get_previous_hash();
+    const OP_BLOCK_GET_EXECUTOR: deno_core::OpDecl = op_block_get_executor();
+    const OP_BLOCK_GET_CONTRACT_ID: deno_core::OpDecl = op_block_get_contract_id();
+    const OP_BLOCK_GET_GAS_LIMIT: deno_core::OpDecl = op_block_get_gas_limit();
+    const OP_BLOCK_GET_GAS_USED: deno_core::OpDecl = op_block_get_gas_used();
+
+    // State query ops
+    const OP_BLOCK_GET_BALANCE: deno_core::OpDecl = op_block_get_balance();
+    const OP_BLOCK_GET_USER: deno_core::OpDecl = op_block_get_user();
+    const OP_BLOCK_GET_TRANSACTION: deno_core::OpDecl = op_block_get_transaction();
+
+    // Transaction ops
+    const OP_TX_TRANSFER: deno_core::OpDecl = op_tx_transfer();
+    const OP_TX_SET_BALANCE: deno_core::OpDecl = op_tx_set_balance();
+    const OP_TX_GET_CHANGES: deno_core::OpDecl = op_tx_get_changes();
+    const OP_TX_EXECUTE: deno_core::OpDecl = op_tx_execute();
+
     let ext = Extension {
         name: "tana_ext",
         ops: std::borrow::Cow::Borrowed(&[
@@ -323,6 +683,21 @@ async fn main() {
             OP_DATA_KEYS,
             OP_DATA_CLEAR,
             OP_DATA_COMMIT,
+            OP_BLOCK_GET_HEIGHT,
+            OP_BLOCK_GET_TIMESTAMP,
+            OP_BLOCK_GET_HASH,
+            OP_BLOCK_GET_PREVIOUS_HASH,
+            OP_BLOCK_GET_EXECUTOR,
+            OP_BLOCK_GET_CONTRACT_ID,
+            OP_BLOCK_GET_GAS_LIMIT,
+            OP_BLOCK_GET_GAS_USED,
+            OP_BLOCK_GET_BALANCE,
+            OP_BLOCK_GET_USER,
+            OP_BLOCK_GET_TRANSACTION,
+            OP_TX_TRANSFER,
+            OP_TX_SET_BALANCE,
+            OP_TX_GET_CHANGES,
+            OP_TX_EXECUTE,
         ]),
         ..Default::default()
     };
@@ -427,12 +802,18 @@ async fn main() {
                 MAX_TOTAL_SIZE: 102400,
                 MAX_KEYS: 1000,
 
-                // Helper: serialize value (supports strings and objects)
+                // Helper: serialize value (supports strings, objects, and BigInt)
                 _serialize(value) {{
                     if (typeof value === 'string') {{
                         return value;
                     }}
-                    return JSON.stringify(value);
+                    // Use replacer to convert BigInt to string
+                    return JSON.stringify(value, (key, val) => {{
+                        if (typeof val === 'bigint') {{
+                            return val.toString();
+                        }}
+                        return val;
+                    }});
                 }},
 
                 // Helper: deserialize value (returns original type)
@@ -506,6 +887,123 @@ async fn main() {
                         throw new Error('Tana runtime not initialized');
                     }}
                     globalThis.__tanaCore.ops.op_data_commit();
+                }}
+            }}
+        }};
+
+        // block module - block context and state queries
+        tanaModules["tana:block"] = {{
+            block: {{
+                get height() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_height();
+                }},
+
+                get timestamp() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_timestamp();
+                }},
+
+                get hash() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_hash();
+                }},
+
+                get previousHash() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_previous_hash();
+                }},
+
+                get executor() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_executor();
+                }},
+
+                get contractId() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_contract_id();
+                }},
+
+                get gasLimit() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_gas_limit();
+                }},
+
+                get gasUsed() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_block_get_gas_used();
+                }},
+
+                MAX_BATCH_QUERY: 10,
+
+                async getBalance(userIds, currencyCode) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return await globalThis.__tanaCore.ops.op_block_get_balance(userIds, currencyCode);
+                }},
+
+                async getUser(userIds) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return await globalThis.__tanaCore.ops.op_block_get_user(userIds);
+                }},
+
+                async getTransaction(txIds) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return await globalThis.__tanaCore.ops.op_block_get_transaction(txIds);
+                }}
+            }}
+        }};
+
+        // tx module - transaction staging and execution
+        tanaModules["tana:tx"] = {{
+            tx: {{
+                transfer(from, to, amount, currency) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    globalThis.__tanaCore.ops.op_tx_transfer(from, to, amount, currency);
+                }},
+
+                setBalance(userId, amount, currency) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    globalThis.__tanaCore.ops.op_tx_set_balance(userId, amount, currency);
+                }},
+
+                getChanges() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_tx_get_changes();
+                }},
+
+                async execute() {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    return globalThis.__tanaCore.ops.op_tx_execute();
                 }}
             }}
         }};

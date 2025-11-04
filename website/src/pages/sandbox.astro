@@ -62,22 +62,89 @@ export const prerender = true;
     };
     document.head.appendChild(script);
 
+    // Environment detection
+    const IS_PRODUCTION = window.location.hostname !== 'localhost' &&
+                         window.location.hostname !== '127.0.0.1' &&
+                         !window.location.hostname.endsWith('.pages.dev');
+
+    // API base URL based on environment
+    const API_BASE_URL = IS_PRODUCTION
+      ? 'https://blockchain.tana.network'  // Production blockchain API
+      : 'http://localhost:8080';           // Local ledger service
+
+    console.log(`[Tana] Environment: ${IS_PRODUCTION ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+    console.log(`[Tana] API: ${API_BASE_URL}`);
+    console.log(`[Tana] Mode: READ-ONLY SIMULATION (no actual state changes)`);
+
     // Domain whitelist for fetch
     const ALLOWED_DOMAINS = [
-      'pokeapi.co',           // Testing until Tana infra is ready
-      'tana.dev',             // Tana domains
-      'tana.network',         // Tana production domain
-      'tana-runtime.pages.dev', // Cloudflare preview
-      'api.tana.dev',
-      'blockchain.tana.dev',
-      'localhost',            // Local development
+      'pokeapi.co',              // Testing/educational examples
+      'tana.network',            // Tana production domain
+      'blockchain.tana.network', // Tana blockchain API
+      'tana-runtime.pages.dev',  // Cloudflare preview
+      'localhost',               // Local development
       '127.0.0.1'
     ];
 
     // Store original fetch before we delete it
     const originalFetch = globalThis.fetch;
 
-    // FIRST: Ensure standard JavaScript globals are available BEFORE doing anything else
+    // FIRST: Ensure localStorage is available (polyfill if needed)
+    // Try to use real localStorage, fall back to polyfill only if necessary
+    let usePolyfill = false;
+    try {
+      // Test if localStorage actually works
+      const testKey = '__tana_localStorage_test__';
+      localStorage.setItem(testKey, 'test');
+      localStorage.removeItem(testKey);
+      console.log('[Tana] Using real localStorage (inspectable in DevTools)');
+    } catch (e) {
+      usePolyfill = true;
+      console.warn('[Tana] localStorage blocked by sandbox, using in-memory polyfill');
+      console.warn('[Tana] To inspect data: use window.__tanaDataStore in console');
+
+      // In-memory localStorage polyfill for sandboxed iframe
+      class LocalStoragePolyfill {
+        constructor() {
+          this._data = new Map();
+          // Expose for debugging in DevTools
+          window.__tanaDataStore = this._data;
+        }
+        getItem(key) {
+          return this._data.has(key) ? this._data.get(key) : null;
+        }
+        setItem(key, value) {
+          this._data.set(key, String(value));
+          console.log(`[Storage] Set ${key} = ${value.substring(0, 100)}${value.length > 100 ? '...' : ''}`);
+        }
+        removeItem(key) {
+          this._data.delete(key);
+          console.log(`[Storage] Removed ${key}`);
+        }
+        clear() {
+          this._data.clear();
+          console.log('[Storage] Cleared all data');
+        }
+        key(index) {
+          const keys = Array.from(this._data.keys());
+          return keys[index] || null;
+        }
+        get length() {
+          return this._data.size;
+        }
+        // Helper for debugging
+        inspect() {
+          const obj = {};
+          for (const [key, value] of this._data) {
+            obj[key] = value;
+          }
+          return obj;
+        }
+      }
+      window.localStorage = new LocalStoragePolyfill();
+    }
+
+    // Ensure standard JavaScript globals are available BEFORE doing anything else
     // Preserve these explicitly in case strict mode or sandboxing affects them
     const _parseInt = parseInt;
     const _parseFloat = parseFloat;
@@ -124,6 +191,97 @@ export const prerender = true;
       return originalFetch(url, options);
     }
 
+    // Mock block context for playground
+    const mockBlock = {
+      height: 12345,
+      timestamp: Date.now(),
+      hash: '0x' + Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+      previousHash: '0x' + Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+      executor: 'user_playground_test',
+      contractId: 'contract_playground',
+      gasLimit: 1000000,
+      gasUsed: 0,
+
+      // State query methods - fetch from ledger API
+      // Maximum items per batch query
+      MAX_BATCH_QUERY: 10,
+
+      async getBalance(userIds, currencyCode) {
+        // Accept single user ID or array of max 10 user IDs
+        const ids = _Array.isArray(userIds) ? userIds : [userIds];
+
+        if (ids.length > this.MAX_BATCH_QUERY) {
+          throw new _Error(`Cannot query more than ${this.MAX_BATCH_QUERY} balances at once`);
+        }
+
+        try {
+          const response = await originalFetch(`${API_BASE_URL}/balances`);
+          const allBalances = await response.json();
+
+          const results = ids.map(userId => {
+            const balance = allBalances.find(b =>
+              b.ownerId === userId && b.currencyCode === currencyCode
+            );
+            return balance ? parseFloat(balance.amount) : 0;
+          });
+
+          // Return single value if single ID was provided, otherwise array
+          return _Array.isArray(userIds) ? results : results[0];
+        } catch (error) {
+          console.error('Failed to fetch balance:', error);
+          return _Array.isArray(userIds) ? ids.map(() => 0) : 0;
+        }
+      },
+
+      async getUser(userIds) {
+        // Accept single user ID or array of max 10 user IDs
+        const ids = _Array.isArray(userIds) ? userIds : [userIds];
+
+        if (ids.length > this.MAX_BATCH_QUERY) {
+          throw new _Error(`Cannot query more than ${this.MAX_BATCH_QUERY} users at once`);
+        }
+
+        try {
+          const response = await originalFetch(`${API_BASE_URL}/users`);
+          const allUsers = await response.json();
+
+          const results = ids.map(userId => {
+            return allUsers.find(u => u.id === userId || u.username === userId) || null;
+          });
+
+          // Return single value if single ID was provided, otherwise array
+          return _Array.isArray(userIds) ? results : results[0];
+        } catch (error) {
+          console.error('Failed to fetch user:', error);
+          return _Array.isArray(userIds) ? ids.map(() => null) : null;
+        }
+      },
+
+      async getTransaction(txIds) {
+        // Accept single transaction ID or array of max 10 transaction IDs
+        const ids = _Array.isArray(txIds) ? txIds : [txIds];
+
+        if (ids.length > this.MAX_BATCH_QUERY) {
+          throw new _Error(`Cannot query more than ${this.MAX_BATCH_QUERY} transactions at once`);
+        }
+
+        try {
+          const response = await originalFetch(`${API_BASE_URL}/transactions`);
+          const allTransactions = await response.json();
+
+          const results = ids.map(txId => {
+            return allTransactions.find(tx => tx.id === txId) || null;
+          });
+
+          // Return single value if single ID was provided, otherwise array
+          return _Array.isArray(txIds) ? results : results[0];
+        } catch (error) {
+          console.error('Failed to fetch transaction:', error);
+          return _Array.isArray(txIds) ? ids.map(() => null) : null;
+        }
+      }
+    };
+
     // Create isolated tana modules
     const tanaModules = {
       'tana:core': {
@@ -165,6 +323,90 @@ export const prerender = true;
       },
       'tana:utils': {
         fetch: whitelistedFetch
+      },
+      'tana:block': {
+        block: mockBlock
+      },
+      'tana:tx': {
+        tx: {
+          // Staging for proposed changes
+          _changes: [],
+
+          // Propose a transfer
+          transfer(from, to, amount, currency) {
+            if (from === to) {
+              throw new _Error('Cannot transfer to self');
+            }
+            if (amount <= 0) {
+              throw new _Error('Amount must be positive');
+            }
+            this._changes.push({
+              type: 'transfer',
+              from,
+              to,
+              amount,
+              currency
+            });
+          },
+
+          // Propose a balance update
+          setBalance(userId, amount, currency) {
+            if (amount < 0) {
+              throw new _Error('Balance cannot be negative');
+            }
+            this._changes.push({
+              type: 'balance_update',
+              userId,
+              amount,
+              currency
+            });
+          },
+
+          // Get current proposed changes
+          getChanges() {
+            return [...this._changes];
+          },
+
+          // Execute transaction (validate and commit)
+          async execute() {
+            const changes = [...this._changes];
+            const gasUsed = mockBlock.gasUsed + (changes.length * 100);
+
+            // Check gas limit
+            if (gasUsed > mockBlock.gasLimit) {
+              const error = 'Out of gas';
+              this._changes = []; // Rollback
+              return {
+                success: false,
+                changes: [],
+                gasUsed: mockBlock.gasLimit,
+                error
+              };
+            }
+
+            // In playground: just return success with changes
+            // In runtime: this would validate balances and persist to DB
+            mockBlock.gasUsed = gasUsed;
+
+            // Send changes to parent window for display
+            window.parent.postMessage({
+              type: 'transactionExecuted',
+              success: true,
+              changes,
+              gasUsed
+            }, '*');
+
+            // Clear staged changes
+            this._changes = [];
+
+            return {
+              success: true,
+              changes,
+              gasUsed,
+              error: null
+            };
+          }
+        }
       },
       'tana:data': {
         data: {

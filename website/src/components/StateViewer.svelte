@@ -8,9 +8,11 @@
   let loading = true;
   let error = null;
   let lastRefresh = null;
+  let transactionResult = null; // Last transaction execution result
 
   const tabs = [
     { id: 'results', label: 'Results', icon: '▶' },
+    { id: 'transaction', label: 'Transaction', icon: '⚡' },
     { id: 'users', label: 'Users', icon: '👤' },
     { id: 'balances', label: 'Balances', icon: '💰' },
     { id: 'transactions', label: 'Transactions', icon: '💸' },
@@ -34,7 +36,27 @@
     refreshState();
     // Auto-refresh every 5 seconds
     const interval = setInterval(refreshState, 5000);
-    return () => clearInterval(interval);
+
+    // Listen for transaction execution results from sandbox
+    const handleMessage = (event) => {
+      if (event.data.type === 'transactionExecuted') {
+        transactionResult = {
+          success: event.data.success,
+          changes: event.data.changes,
+          gasUsed: event.data.gasUsed,
+          timestamp: new Date().toLocaleTimeString()
+        };
+        // Auto-switch to transaction tab to show results
+        activeTab = 'transaction';
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('message', handleMessage);
+    };
   });
 
   // Expose method to execute code in the sandbox
@@ -82,15 +104,75 @@
 
   <!-- Tab Content -->
   <div class="tab-content">
-    {#if activeTab === 'results'}
-      <!-- Results are shown via the iframe positioned absolutely -->
-      <div class="results-panel"></div>
-    {:else if loading && !blockchainState}
+    <!-- Results panel - always present but hidden when not active -->
+    <div class="results-panel" style="display: {activeTab === 'results' ? 'block' : 'none'};">
+      <iframe
+        bind:this={sandboxIframe}
+        src="/sandbox"
+        title="Tana Sandbox"
+      ></iframe>
+    </div>
+
+    {#if activeTab === 'transaction'}
+      <div class="data-panel">
+        <div class="panel-header">
+          <h3>Transaction Execution</h3>
+        </div>
+        {#if !transactionResult}
+          <div class="empty-state">
+            <p>No transaction executed yet</p>
+            <p class="hint">Run a contract with tx.execute() to see results here</p>
+          </div>
+        {:else}
+          <div class="transaction-result">
+            <div class="result-header" class:success={transactionResult.success}>
+              <span class="status-icon">{transactionResult.success ? '✓' : '✗'}</span>
+              <span class="status-text">
+                {transactionResult.success ? 'Transaction Successful' : 'Transaction Failed'}
+              </span>
+              <span class="timestamp">{transactionResult.timestamp}</span>
+            </div>
+
+            <div class="result-details">
+              <div class="detail-row">
+                <span class="label">Gas Used:</span>
+                <span class="value mono">{transactionResult.gasUsed.toLocaleString()}</span>
+              </div>
+
+              {#if transactionResult.changes && transactionResult.changes.length > 0}
+                <div class="changes-section">
+                  <h4>State Changes ({transactionResult.changes.length})</h4>
+                  {#each transactionResult.changes as change}
+                    <div class="change-item">
+                      {#if change.type === 'transfer'}
+                        <div class="change-type">Transfer</div>
+                        <div class="change-details">
+                          <span class="mono">{change.from}</span>
+                          <span class="arrow">→</span>
+                          <span class="mono">{change.to}</span>
+                          <span class="amount">{change.amount} {change.currency}</span>
+                        </div>
+                      {:else if change.type === 'balance_update'}
+                        <div class="change-type">Balance Update</div>
+                        <div class="change-details">
+                          <span class="mono">{change.userId}</span>
+                          <span class="amount">{change.amount} {change.currency}</span>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {:else if activeTab !== 'results' && loading && !blockchainState}
       <div class="loading-state">
         <div class="spinner"></div>
         <p>Loading blockchain state...</p>
       </div>
-    {:else if error}
+    {:else if activeTab !== 'results' && error}
       <div class="error-state">
         <p class="error-icon">⚠️</p>
         <p class="error-message">{error}</p>
@@ -252,15 +334,6 @@
       </div>
     {/if}
   </div>
-
-  <!-- Sandbox iframe (always present but only visible in results tab) -->
-  <iframe
-    bind:this={sandboxIframe}
-    src="/sandbox"
-    sandbox="allow-scripts allow-same-origin"
-    title="Tana Sandbox"
-    style="display: {activeTab === 'results' ? 'block' : 'none'}; position: absolute; top: 65px; left: 0; width: 100%; height: calc(100% - 65px); border: none;"
-  ></iframe>
 </div>
 
 <style>
@@ -534,5 +607,97 @@
   .empty-state .hint {
     font-size: 13px;
     color: #999;
+  }
+
+  /* Transaction Result Styles */
+  .transaction-result {
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .result-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    background: #f5f5f5;
+    border-bottom: 2px solid #e0e0e0;
+  }
+
+  .result-header.success {
+    background: #e8f5e9;
+    border-bottom-color: #4caf50;
+  }
+
+  .status-icon {
+    font-size: 24px;
+    font-weight: bold;
+  }
+
+  .result-header.success .status-icon {
+    color: #4caf50;
+  }
+
+  .status-text {
+    font-size: 16px;
+    font-weight: 600;
+    flex: 1;
+  }
+
+  .result-header.success .status-text {
+    color: #2e7d32;
+  }
+
+  .timestamp {
+    font-size: 12px;
+    color: #999;
+  }
+
+  .result-details {
+    padding: 16px;
+  }
+
+  .changes-section {
+    margin-top: 16px;
+  }
+
+  .changes-section h4 {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+  }
+
+  .change-item {
+    background: #f9f9f9;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+  }
+
+  .change-type {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #999;
+    margin-bottom: 8px;
+  }
+
+  .change-details {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .change-details .arrow {
+    color: #999;
+  }
+
+  .change-details .amount {
+    margin-left: auto;
+    font-weight: 600;
+    color: #2e7d32;
   }
 </style>

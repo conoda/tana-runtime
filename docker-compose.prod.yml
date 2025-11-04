@@ -1,0 +1,180 @@
+version: '3.8'
+
+# Production Docker Compose Configuration
+# For deployment to https://blockchain.tana.network
+
+services:
+  # ============================================================================
+  # Database Services
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tana}
+      POSTGRES_USER: ${POSTGRES_USER:-tana}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tana}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tana-internal
+    # Don't expose postgres to external network in production
+    # Only internal services can access it
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tana-internal
+    # Don't expose redis to external network in production
+
+  # ============================================================================
+  # Tana Ledger Service (Blockchain API)
+  # ============================================================================
+  tana-ledger:
+    build:
+      context: ./ledger
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-tana}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tana}
+      # CORS configuration for production
+      ALLOWED_ORIGINS: https://tana.network,https://blockchain.tana.network,https://playground.tana.network
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - tana-internal
+      - tana-public
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================================================
+  # Tana Contracts Service
+  # ============================================================================
+  tana-contracts:
+    build:
+      context: ./contracts
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-tana}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tana}
+      REDIS_URL: redis://redis:6379
+      LEDGER_URL: http://tana-ledger:8080
+      RUNTIME_PATH: /runtime/target/release/tana-runtime
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      tana-ledger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - tana-internal
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================================================
+  # Tana Node Service
+  # ============================================================================
+  tana-node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9933:9933"   # JSON-RPC
+      - "30333:30333" # P2P
+    environment:
+      PORT: 9933
+      P2P_PORT: 30333
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-tana}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tana}
+      LEDGER_URL: http://tana-ledger:8080
+      CONTRACTS_URL: http://tana-contracts:8081
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tana-ledger:
+        condition: service_healthy
+      tana-contracts:
+        condition: service_started
+    networks:
+      - tana-internal
+      - tana-public
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  tana-internal:
+    driver: bridge
+    internal: true  # No external access
+  tana-public:
+    driver: bridge
