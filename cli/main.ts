@@ -16,6 +16,9 @@ program
 const newCommand = program
   .command('new')
   .description('Create new chain, node, user, or contract')
+  .action(() => {
+    newCommand.help()
+  })
 
 newCommand
   .command('chain <name>')
@@ -55,6 +58,9 @@ newCommand
 const deployCommand = program
   .command('deploy')
   .description('Deploy user, contract, or blockchain to network')
+  .action(() => {
+    deployCommand.help()
+  })
 
 deployCommand
   .command('user <username>')

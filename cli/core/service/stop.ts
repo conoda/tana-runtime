@@ -5,13 +5,13 @@
  */
 
 import chalk from 'chalk'
-import { isLocalChainRunning } from '../../utils/config'
+import { isLedgerReachable } from '../../utils/config'
 
 export async function stop() {
   console.log(chalk.bold('\n🛑 Stopping Tana services...\n'))
 
   // Check if anything is running
-  if (!(await isLocalChainRunning())) {
+  if (!(await isLedgerReachable())) {
     console.log(chalk.gray('No services are currently running.\n'))
     return
   }

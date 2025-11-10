@@ -3,20 +3,23 @@ import {
   readGlobalConfig,
   listChains,
   listUsers,
-  isLocalChainRunning
+  isLedgerReachable,
+  getLedgerUrl
 } from '../../utils/config'
 
 export async function status() {
   console.log(chalk.bold('\n📊 Tana Status\n'))
 
   // Check if ledger is running
-  const isRunning = await isLocalChainRunning()
+  const ledgerUrl = getLedgerUrl()
+  const isRunning = await isLedgerReachable()
 
   console.log(chalk.bold('Services:'))
   if (isRunning) {
-    console.log(`  Ledger:        ${chalk.green('●')} Running on ${chalk.cyan('http://localhost:8080')}`)
+    console.log(`  Ledger:        ${chalk.green('●')} Running on ${chalk.cyan(ledgerUrl)}`)
   } else {
     console.log(`  Ledger:        ${chalk.gray('○')} Not running`)
+    console.log(`  Target URL:    ${chalk.gray(ledgerUrl)}`)
   }
   console.log()
 

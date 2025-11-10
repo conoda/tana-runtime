@@ -4,6 +4,7 @@
   "module": "main.ts",
   "type": "module",
   "scripts": {
+    "dev": "bun run ./main.ts",
     "make": "bun build ./main.ts --compile --outfile dist/tana"
   },
   "devDependencies": {

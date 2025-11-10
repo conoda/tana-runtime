@@ -15,6 +15,13 @@ procs:
     cwd: .
     shell: "bun cli/main.ts start"
     autostart: true
+    
+  edge:
+    cwd: ./tana-edge
+    shell: "cargo run --release"
+    autostart: true
+    env:
+      TANA_LEDGER_URL: "http://localhost:8080"
 
   # Websites
   landing:

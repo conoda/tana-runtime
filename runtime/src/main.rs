@@ -637,7 +637,46 @@ fn op_tx_execute() -> Result<serde_json::Value, deno_error::JsErrorBox> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let total_start = std::time::Instant::now();
+
+    // Get contract file from command line args (defaults to example.ts)
+    let args: Vec<String> = std::env::args().collect();
+    let contract_file = if args.len() > 1 {
+        &args[1]
+    } else {
+        "example.ts"
+    };
+
+    // Check for pre-compiled .js version
+    let (file_path, is_precompiled) = if contract_file.ends_with(".ts") {
+        let js_version = contract_file.replace(".ts", ".js");
+        if std::path::Path::new(&js_version).exists() {
+            eprintln!("[RUNTIME] Using pre-compiled: {}", js_version);
+            (js_version, true)
+        } else {
+            eprintln!("[RUNTIME] Using TypeScript: {}", contract_file);
+            (contract_file.to_string(), false)
+        }
+    } else if contract_file.ends_with(".js") {
+        eprintln!("[RUNTIME] Using pre-compiled: {}", contract_file);
+        (contract_file.to_string(), true)
+    } else {
+        // Try both .js and .ts
+        let js_path = format!("{}.js", contract_file);
+        let ts_path = format!("{}.ts", contract_file);
+        if std::path::Path::new(&js_path).exists() {
+            eprintln!("[RUNTIME] Using pre-compiled: {}", js_path);
+            (js_path, true)
+        } else if std::path::Path::new(&ts_path).exists() {
+            eprintln!("[RUNTIME] Using TypeScript: {}", ts_path);
+            (ts_path, false)
+        } else {
+            panic!("Contract not found: {} (tried .js and .ts)", contract_file);
+        }
+    };
+
     // 1) expose our ops
+    let ext_start = std::time::Instant::now();
     const OP_SUM: deno_core::OpDecl = op_sum();
     const OP_PRINT_STDERR: deno_core::OpDecl = op_print_stderr();
     const OP_FETCH: deno_core::OpDecl = op_fetch();
@@ -701,386 +740,661 @@ async fn main() {
         ]),
         ..Default::default()
     };
+    eprintln!("  [TIMING] Extension setup: {}ms", ext_start.elapsed().as_millis());
 
     // 2) runtime – NO custom module loader for now
+    let runtime_start = std::time::Instant::now();
     let mut runtime = JsRuntime::new(RuntimeOptions {
         extensions: vec![ext],
         // we'll just use the default loader (= scripts only)
         module_loader: None,
         ..Default::default()
     });
+    eprintln!("  [TIMING] V8 runtime creation: {}ms", runtime_start.elapsed().as_millis());
 
-    // 3) load TS compiler (downloaded once next to the binary)
-    let ts_src = fs::read_to_string("typescript.js")
-        .expect("missing typescript.js");
-    runtime
-        .execute_script("typescript.js", ModuleCodeString::from(ts_src))
-        .expect("load ts");
+    // 3) load TS compiler (only if not pre-compiled)
+    if !is_precompiled {
+        let ts_load_start = std::time::Instant::now();
+        let ts_src = fs::read_to_string("typescript.js")
+            .expect("missing typescript.js");
+        runtime
+            .execute_script("typescript.js", ModuleCodeString::from(ts_src))
+            .expect("load ts");
+        eprintln!("  [TIMING] TypeScript compiler load: {}ms", ts_load_start.elapsed().as_millis());
+    } else {
+        eprintln!("  [TIMING] TypeScript compiler load: 0ms (pre-compiled JS)");
+    }
 
-    // 4) load our internal globals (your tana-globals.ts)
-    let tana_globals = fs::read_to_string("tana-globals.ts")
-        .expect("missing tana-globals.ts");
+    // 4) load bootstrap (conditional based on whether contract is pre-compiled)
+    let bootstrap_start = std::time::Instant::now();
 
-    // derive our own crate version from Cargo
     let tana_version = env!("CARGO_PKG_VERSION");
-    // for now we can't query deno_core/v8 at runtime in this version,
-    // so keep them as compile-time strings (can be filled by build.rs later)
     let deno_core_version = env!("DENO_CORE_VERSION");
     let v8_version = env!("V8_VERSION");
 
-    // this shim gives us a "fake" module system in JS:
-    //   import { console } from "tana/core"
-    // will become a lookup into a JS map.
-    let bootstrap_globals = format!(
-        r#"
-        // 1. FIRST: Stash Deno.core before we delete it
-        globalThis.__tanaCore = globalThis.Deno?.core;
+    if !is_precompiled {
+        // Full bootstrap with tana-globals transpilation
+        let tana_globals = fs::read_to_string("tana-globals.ts")
+            .expect("missing tana-globals.ts");
 
-        // 2. Delete Deno to create sandbox
-        delete globalThis.Deno;
+        let bootstrap_globals = format!(
+            r#"
+            // 1. FIRST: Stash Deno.core before we delete it
+            globalThis.__tanaCore = globalThis.Deno?.core;
 
-        // 3. NOW we can safely define modules that use __tanaCore
-        const tanaModules = Object.create(null);
+            // 2. Delete Deno to create sandbox
+            delete globalThis.Deno;
 
-        // core module - browser-like console API
-        tanaModules["tana/core"] = {{
-            console: {{
-                log(...args) {{
-                    if (globalThis.__tanaCore) {{
-                        const msg = args.map(v => {{
-                            if (typeof v === 'object') {{
-                                try {{ return JSON.stringify(v, null, 2); }}
-                                catch {{ return String(v); }}
-                            }}
-                            return String(v);
-                        }}).join(' ');
-                        globalThis.__tanaCore.print(msg + "\n");
-                    }}
-                }},
-                error(...args) {{
-                    if (globalThis.__tanaCore) {{
-                        const msg = args.map(v => {{
-                            if (typeof v === 'object') {{
-                                try {{ return JSON.stringify(v, null, 2); }}
-                                catch {{ return String(v); }}
-                            }}
-                            return String(v);
-                        }}).join(' ');
-                        globalThis.__tanaCore.ops.op_print_stderr(msg + "\n");
-                    }}
-                }},
-            }},
-            version: {{
-                tana: "{tana_version}",
-                deno_core: "{deno_core_version}",
-                v8: "{v8_version}",
-            }},
-        }};
+            // 3. NOW we can safely define modules that use __tanaCore
+            const tanaModules = Object.create(null);
 
-        // utils module - whitelisted fetch API
-        tanaModules["tana/utils"] = {{
-            async fetch(url) {{
-                if (!globalThis.__tanaCore) {{
-                    throw new Error('Tana runtime not initialized');
-                }}
-                const result = await globalThis.__tanaCore.ops.op_fetch(url);
-                // Return a Response-like object
-                return {{
-                    ok: true,
-                    status: 200,
-                    async text() {{ return result; }},
-                    async json() {{ return JSON.parse(result); }}
-                }};
-            }}
-        }};
-
-        // data module - persistent KV storage
-        tanaModules["tana/data"] = {{
-            data: {{
-                MAX_KEY_SIZE: 256,
-                MAX_VALUE_SIZE: 10240,
-                MAX_TOTAL_SIZE: 102400,
-                MAX_KEYS: 1000,
-
-                // Helper: serialize value (supports strings, objects, and BigInt)
-                _serialize(value) {{
-                    if (typeof value === 'string') {{
-                        return value;
-                    }}
-                    // Use replacer to convert BigInt to string
-                    return JSON.stringify(value, (key, val) => {{
-                        if (typeof val === 'bigint') {{
-                            return val.toString();
+            // core module - browser-like console API
+            tanaModules["tana/core"] = {{
+                console: {{
+                    log(...args) {{
+                        if (globalThis.__tanaCore) {{
+                            const msg = args.map(v => {{
+                                if (typeof v === 'object') {{
+                                    try {{ return JSON.stringify(v, null, 2); }}
+                                    catch {{ return String(v); }}
+                                }}
+                                return String(v);
+                            }}).join(' ');
+                            globalThis.__tanaCore.print(msg + "\n");
                         }}
-                        return val;
-                    }});
+                    }},
+                    error(...args) {{
+                        if (globalThis.__tanaCore) {{
+                            const msg = args.map(v => {{
+                                if (typeof v === 'object') {{
+                                    try {{ return JSON.stringify(v, null, 2); }}
+                                    catch {{ return String(v); }}
+                                }}
+                                return String(v);
+                            }}).join(' ');
+                            globalThis.__tanaCore.ops.op_print_stderr(msg + "\n");
+                        }}
+                    }},
                 }},
-
-                // Helper: deserialize value (returns original type)
-                _deserialize(value) {{
-                    if (value === null) return null;
-                    try {{
-                        return JSON.parse(value);
-                    }} catch {{
-                        return value; // Return as string if not JSON
-                    }}
+                version: {{
+                    tana: "{tana_version}",
+                    deno_core: "{deno_core_version}",
+                    v8: "{v8_version}",
                 }},
+            }};
 
-                async set(key, value) {{
+            // utils module - whitelisted fetch API
+            tanaModules["tana/utils"] = {{
+                async fetch(url) {{
                     if (!globalThis.__tanaCore) {{
                         throw new Error('Tana runtime not initialized');
                     }}
-                    const serialized = this._serialize(value);
-                    globalThis.__tanaCore.ops.op_data_set(key, serialized);
-                }},
-
-                async get(key) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    const value = globalThis.__tanaCore.ops.op_data_get(key);
-                    return this._deserialize(value);
-                }},
-
-                async delete(key) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    globalThis.__tanaCore.ops.op_data_delete(key);
-                }},
-
-                async has(key) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_data_has(key);
-                }},
-
-                async keys(pattern) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_data_keys(pattern || null);
-                }},
-
-                async entries() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    const allKeys = await this.keys();
-                    const result = {{}};
-                    for (const key of allKeys) {{
-                        result[key] = await this.get(key);
-                    }}
-                    return result;
-                }},
-
-                async clear() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    globalThis.__tanaCore.ops.op_data_clear();
-                }},
-
-                async commit() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    globalThis.__tanaCore.ops.op_data_commit();
+                    const result = await globalThis.__tanaCore.ops.op_fetch(url);
+                    // Return a Response-like object
+                    return {{
+                        ok: true,
+                        status: 200,
+                        async text() {{ return result; }},
+                        async json() {{ return JSON.parse(result); }}
+                    }};
                 }}
-            }}
-        }};
+            }};
 
-        // block module - block context and state queries
-        tanaModules["tana/block"] = {{
-            block: {{
-                get height() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
+            // data module - persistent KV storage
+            tanaModules["tana/data"] = {{
+                data: {{
+                    MAX_KEY_SIZE: 256,
+                    MAX_VALUE_SIZE: 10240,
+                    MAX_TOTAL_SIZE: 102400,
+                    MAX_KEYS: 1000,
+
+                    // Helper: serialize value (supports strings, objects, and BigInt)
+                    _serialize(value) {{
+                        if (typeof value === 'string') {{
+                            return value;
+                        }}
+                        // Use replacer to convert BigInt to string
+                        return JSON.stringify(value, (key, val) => {{
+                            if (typeof val === 'bigint') {{
+                                return val.toString();
+                            }}
+                            return val;
+                        }});
+                    }},
+
+                    // Helper: deserialize value (returns original type)
+                    _deserialize(value) {{
+                        if (value === null) return null;
+                        try {{
+                            return JSON.parse(value);
+                        }} catch {{
+                            return value; // Return as string if not JSON
+                        }}
+                    }},
+
+                    async set(key, value) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        const serialized = this._serialize(value);
+                        globalThis.__tanaCore.ops.op_data_set(key, serialized);
+                    }},
+
+                    async get(key) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        const value = globalThis.__tanaCore.ops.op_data_get(key);
+                        return this._deserialize(value);
+                    }},
+
+                    async delete(key) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        globalThis.__tanaCore.ops.op_data_delete(key);
+                    }},
+
+                    async has(key) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_data_has(key);
+                    }},
+
+                    async keys(pattern) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_data_keys(pattern || null);
+                    }},
+
+                    async entries() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        const allKeys = await this.keys();
+                        const result = {{}};
+                        for (const key of allKeys) {{
+                            result[key] = await this.get(key);
+                        }}
+                        return result;
+                    }},
+
+                    async clear() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        globalThis.__tanaCore.ops.op_data_clear();
+                    }},
+
+                    async commit() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        globalThis.__tanaCore.ops.op_data_commit();
                     }}
-                    return globalThis.__tanaCore.ops.op_block_get_height();
-                }},
-
-                get timestamp() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_timestamp();
-                }},
-
-                get hash() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_hash();
-                }},
-
-                get previousHash() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_previous_hash();
-                }},
-
-                get executor() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_executor();
-                }},
-
-                get contractId() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_contract_id();
-                }},
-
-                get gasLimit() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_gas_limit();
-                }},
-
-                get gasUsed() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_block_get_gas_used();
-                }},
-
-                MAX_BATCH_QUERY: 10,
-
-                async getBalance(userIds, currencyCode) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return await globalThis.__tanaCore.ops.op_block_get_balance(userIds, currencyCode);
-                }},
-
-                async getUser(userIds) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return await globalThis.__tanaCore.ops.op_block_get_user(userIds);
-                }},
-
-                async getTransaction(txIds) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return await globalThis.__tanaCore.ops.op_block_get_transaction(txIds);
                 }}
-            }}
-        }};
+            }};
 
-        // tx module - transaction staging and execution
-        tanaModules["tana/tx"] = {{
-            tx: {{
-                transfer(from, to, amount, currency) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    globalThis.__tanaCore.ops.op_tx_transfer(from, to, amount, currency);
-                }},
+            // block module - block context and state queries
+            tanaModules["tana/block"] = {{
+                block: {{
+                    get height() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_height();
+                    }},
 
-                setBalance(userId, amount, currency) {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    globalThis.__tanaCore.ops.op_tx_set_balance(userId, amount, currency);
-                }},
+                    get timestamp() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_timestamp();
+                    }},
 
-                getChanges() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
-                    }}
-                    return globalThis.__tanaCore.ops.op_tx_get_changes();
-                }},
+                    get hash() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_hash();
+                    }},
 
-                async execute() {{
-                    if (!globalThis.__tanaCore) {{
-                        throw new Error('Tana runtime not initialized');
+                    get previousHash() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_previous_hash();
+                    }},
+
+                    get executor() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_executor();
+                    }},
+
+                    get contractId() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_contract_id();
+                    }},
+
+                    get gasLimit() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_gas_limit();
+                    }},
+
+                    get gasUsed() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_block_get_gas_used();
+                    }},
+
+                    MAX_BATCH_QUERY: 10,
+
+                    async getBalance(userIds, currencyCode) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return await globalThis.__tanaCore.ops.op_block_get_balance(userIds, currencyCode);
+                    }},
+
+                    async getUser(userIds) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return await globalThis.__tanaCore.ops.op_block_get_user(userIds);
+                    }},
+
+                    async getTransaction(txIds) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return await globalThis.__tanaCore.ops.op_block_get_transaction(txIds);
                     }}
-                    return globalThis.__tanaCore.ops.op_tx_execute();
                 }}
-            }}
-        }};
+            }};
 
-        // 4. Load user-defined globals (your TS)
-        (function () {{
-          const src = {tana_src};
-          const out = ts.transpileModule(src, {{
-            compilerOptions: {{
-              target: "ES2020",
-              module: ts.ModuleKind.ESNext
-            }}
-          }});
-          (0, eval)(out.outputText);
-        }})();
+            // tx module - transaction staging and execution
+            tanaModules["tana/tx"] = {{
+                tx: {{
+                    transfer(from, to, amount, currency) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        globalThis.__tanaCore.ops.op_tx_transfer(from, to, amount, currency);
+                    }},
 
-        // 5. Import shim
-        globalThis.__tanaImport = function (spec) {{
-          const m = tanaModules[spec];
-          if (!m) throw new Error("unknown tana module: " + spec);
-          return m;
-        }};
-        "#,
-        tana_src = serde_json::to_string(&tana_globals).unwrap(),
-        tana_version = tana_version,
-        deno_core_version = deno_core_version,
-        v8_version = v8_version,
-    );
+                    setBalance(userId, amount, currency) {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        globalThis.__tanaCore.ops.op_tx_set_balance(userId, amount, currency);
+                    }},
 
-    runtime
-        .execute_script("tana-bootstrap.js", ModuleCodeString::from(bootstrap_globals))
-        .expect("bootstrap tana globals");
+                    getChanges() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_tx_get_changes();
+                    }},
 
-    // 5) load user TS
-    let user_ts = fs::read_to_string("example.ts")
-        .expect("missing example.ts");
+                    async execute() {{
+                        if (!globalThis.__tanaCore) {{
+                            throw new Error('Tana runtime not initialized');
+                        }}
+                        return globalThis.__tanaCore.ops.op_tx_execute();
+                    }}
+                }}
+            }};
 
-    // 6) transpile+run user TS, but rewrite `import ... from "tana/*"`
-    //    into calls to __tanaImport so we don't need Rust ModuleLoader.
-    let runner = format!(
-        r#"
-        let src = {user_src};
+            // 4. Load user-defined globals (your TS)
+            (function () {{
+              const src = {tana_src};
+              const out = ts.transpileModule(src, {{
+                compilerOptions: {{
+                  target: "ES2020",
+                  module: ts.ModuleKind.ESNext
+                }}
+              }});
+              (0, eval)(out.outputText);
+            }})();
 
-        // line-by-line import rewriter so we don't clobber the whole file
-        src = src
-          .split("\n")
-          .map((line) => {{
-            const m = line.match(/^\s*import\s+{{([^}}]+)}}\s+from\s+["'](tana\/[^"']+)["'];?\s*$/);
-            if (!m) return line;
-            const names = m[1].trim();
-            const spec = m[2].trim();
-            return "const {{" + names + "}} = __tanaImport('" + spec + "');";
-          }})
-          .join("\n");
+            // 5. Import shim
+            globalThis.__tanaImport = function (spec) {{
+              const m = tanaModules[spec];
+              if (!m) throw new Error("unknown tana module: " + spec);
+              return m;
+            }};
+            "#,
+            tana_src = serde_json::to_string(&tana_globals).unwrap(),
+            tana_version = tana_version,
+            deno_core_version = deno_core_version,
+            v8_version = v8_version,
+        );
 
-        const out = ts.transpileModule(src, {{
-          compilerOptions: {{
-            target: "ES2020",
-            module: ts.ModuleKind.ESNext
-          }}
-        }});
+        runtime
+            .execute_script("tana-bootstrap.js", ModuleCodeString::from(bootstrap_globals))
+            .expect("bootstrap tana globals");
+    } else {
+        // Lightweight bootstrap for pre-compiled JS (no transpilation needed)
+        let simple_bootstrap = format!(
+            r#"
+            // 1. Stash Deno.core before we delete it
+            globalThis.__tanaCore = globalThis.Deno?.core;
 
-        // Wrap in async IIFE to support top-level await (same as playground)
-        const wrappedCode = "(async function() {{\n  'use strict';\n  " + out.outputText + "\n}})();";
+            // 2. Delete Deno to create sandbox
+            delete globalThis.Deno;
 
-        (0, eval)(wrappedCode);
-        "#,
-        user_src = serde_json::to_string(&user_ts).unwrap(),
-    );
+            // 3. Define tana modules directly (no transpilation)
+            const tanaModules = Object.create(null);
 
-    runtime
-        .execute_script("run-user.ts", ModuleCodeString::from(runner))
-        .expect("run user script");
+            // core module
+            tanaModules["tana/core"] = {{
+                console: {{
+                    log(...args) {{
+                        if (globalThis.__tanaCore) {{
+                            const msg = args.map(v => {{
+                                if (typeof v === 'object') {{
+                                    try {{ return JSON.stringify(v, null, 2); }}
+                                    catch {{ return String(v); }}
+                                }}
+                                return String(v);
+                            }}).join(' ');
+                            globalThis.__tanaCore.print(msg + "\n");
+                        }}
+                    }},
+                    error(...args) {{
+                        if (globalThis.__tanaCore) {{
+                            const msg = args.map(v => {{
+                                if (typeof v === 'object') {{
+                                    try {{ return JSON.stringify(v, null, 2); }}
+                                    catch {{ return String(v); }}
+                                }}
+                                return String(v);
+                            }}).join(' ');
+                            globalThis.__tanaCore.ops.op_print_stderr(msg + "\n");
+                        }}
+                    }},
+                }},
+                version: {{
+                    tana: "{tana_version}",
+                    deno_core: "{deno_core_version}",
+                    v8: "{v8_version}",
+                }},
+            }};
+
+            // utils module
+            tanaModules["tana/utils"] = {{
+                async fetch(url) {{
+                    if (!globalThis.__tanaCore) {{
+                        throw new Error('Tana runtime not initialized');
+                    }}
+                    const result = await globalThis.__tanaCore.ops.op_fetch(url);
+                    return {{
+                        ok: true,
+                        status: 200,
+                        async text() {{ return result; }},
+                        async json() {{ return JSON.parse(result); }}
+                    }};
+                }}
+            }};
+
+            // data module
+            tanaModules["tana/data"] = {{
+                data: {{
+                    MAX_KEY_SIZE: 256,
+                    MAX_VALUE_SIZE: 10240,
+                    MAX_TOTAL_SIZE: 102400,
+                    MAX_KEYS: 1000,
+
+                    _serialize(value) {{
+                        if (typeof value === 'string') return value;
+                        return JSON.stringify(value, (key, val) => {{
+                            if (typeof val === 'bigint') return val.toString();
+                            return val;
+                        }});
+                    }},
+
+                    _deserialize(value) {{
+                        if (value === null) return null;
+                        try {{ return JSON.parse(value); }}
+                        catch {{ return value; }}
+                    }},
+
+                    async set(key, value) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        const serialized = this._serialize(value);
+                        globalThis.__tanaCore.ops.op_data_set(key, serialized);
+                    }},
+
+                    async get(key) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        const value = globalThis.__tanaCore.ops.op_data_get(key);
+                        return this._deserialize(value);
+                    }},
+
+                    async delete(key) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        globalThis.__tanaCore.ops.op_data_delete(key);
+                    }},
+
+                    async has(key) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_data_has(key);
+                    }},
+
+                    async keys(pattern) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_data_keys(pattern || null);
+                    }},
+
+                    async entries() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        const allKeys = await this.keys();
+                        const result = {{}};
+                        for (const key of allKeys) result[key] = await this.get(key);
+                        return result;
+                    }},
+
+                    async clear() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        globalThis.__tanaCore.ops.op_data_clear();
+                    }},
+
+                    async commit() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        globalThis.__tanaCore.ops.op_data_commit();
+                    }}
+                }}
+            }};
+
+            // block module
+            tanaModules["tana/block"] = {{
+                block: {{
+                    get height() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_height();
+                    }},
+                    get timestamp() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_timestamp();
+                    }},
+                    get hash() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_hash();
+                    }},
+                    get previousHash() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_previous_hash();
+                    }},
+                    get executor() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_executor();
+                    }},
+                    get contractId() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_contract_id();
+                    }},
+                    get gasLimit() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_gas_limit();
+                    }},
+                    get gasUsed() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_block_get_gas_used();
+                    }},
+
+                    MAX_BATCH_QUERY: 10,
+
+                    async getBalance(userIds, currencyCode) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return await globalThis.__tanaCore.ops.op_block_get_balance(userIds, currencyCode);
+                    }},
+
+                    async getUser(userIds) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return await globalThis.__tanaCore.ops.op_block_get_user(userIds);
+                    }},
+
+                    async getTransaction(txIds) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return await globalThis.__tanaCore.ops.op_block_get_transaction(txIds);
+                    }}
+                }}
+            }};
+
+            // tx module
+            tanaModules["tana/tx"] = {{
+                tx: {{
+                    transfer(from, to, amount, currency) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        globalThis.__tanaCore.ops.op_tx_transfer(from, to, amount, currency);
+                    }},
+
+                    setBalance(userId, amount, currency) {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        globalThis.__tanaCore.ops.op_tx_set_balance(userId, amount, currency);
+                    }},
+
+                    getChanges() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_tx_get_changes();
+                    }},
+
+                    async execute() {{
+                        if (!globalThis.__tanaCore) throw new Error('Tana runtime not initialized');
+                        return globalThis.__tanaCore.ops.op_tx_execute();
+                    }}
+                }}
+            }};
+
+            // Import shim
+            globalThis.__tanaImport = function (spec) {{
+                const m = tanaModules[spec];
+                if (!m) throw new Error("unknown tana module: " + spec);
+                return m;
+            }};
+            "#,
+            tana_version = tana_version,
+            deno_core_version = deno_core_version,
+            v8_version = v8_version,
+        );
+
+        runtime
+            .execute_script("simple-bootstrap.js", ModuleCodeString::from(simple_bootstrap))
+            .expect("bootstrap lightweight");
+    }
+
+    eprintln!("  [TIMING] Bootstrap: {}ms", bootstrap_start.elapsed().as_millis());
+
+    // 5) load and execute contract
+    let exec_start = std::time::Instant::now();
+    let user_code = fs::read_to_string(&file_path)
+        .expect(&format!("failed to read contract: {}", file_path));
+
+    if !is_precompiled {
+        // Transpile TypeScript contract
+        let runner = format!(
+            r#"
+            let src = {user_src};
+
+            // line-by-line import rewriter so we don't clobber the whole file
+            src = src
+              .split("\n")
+              .map((line) => {{
+                const m = line.match(/^\s*import\s+{{([^}}]+)}}\s+from\s+["'](tana\/[^"']+)["'];?\s*$/);
+                if (!m) return line;
+                const names = m[1].trim();
+                const spec = m[2].trim();
+                return "const {{" + names + "}} = __tanaImport('" + spec + "');";
+              }})
+              .join("\n");
+
+            const out = ts.transpileModule(src, {{
+              compilerOptions: {{
+                target: "ES2020",
+                module: ts.ModuleKind.ESNext
+              }}
+            }});
+
+            // Wrap in async IIFE to support top-level await (same as playground)
+            const wrappedCode = "(async function() {{\n  'use strict';\n  " + out.outputText + "\n}})();";
+
+            (0, eval)(wrappedCode);
+            "#,
+            user_src = serde_json::to_string(&user_code).unwrap(),
+        );
+
+        runtime
+            .execute_script("run-user.ts", ModuleCodeString::from(runner))
+            .expect("run user script");
+    } else {
+        // Execute pre-compiled JavaScript directly
+        let runner = format!(
+            r#"
+            let src = {user_src};
+
+            // Rewrite imports to use __tanaImport
+            src = src
+              .split("\n")
+              .map((line) => {{
+                const m = line.match(/^\s*import\s+{{([^}}]+)}}\s+from\s+["'](tana\/[^"']+)["'];?\s*$/);
+                if (!m) return line;
+                const names = m[1].trim();
+                const spec = m[2].trim();
+                return "const {{" + names + "}} = __tanaImport('" + spec + "');";
+              }})
+              .join("\n");
+
+            // Wrap in async IIFE to support top-level await
+            const wrappedCode = "(async function() {{\n  'use strict';\n  " + src + "\n}})();";
+
+            (0, eval)(wrappedCode);
+            "#,
+            user_src = serde_json::to_string(&user_code).unwrap(),
+        );
+
+        runtime
+            .execute_script("run-user.js", ModuleCodeString::from(runner))
+            .expect("run user script");
+    }
+
+    eprintln!("  [TIMING] Contract execution: {}ms", exec_start.elapsed().as_millis());
 
     // Drive the event loop to completion (handles async ops like fetch)
+    let event_loop_start = std::time::Instant::now();
     runtime
         .run_event_loop(deno_core::PollEventLoopOptions::default())
         .await
         .expect("event loop failed");
+    eprintln!("  [TIMING] Event loop: {}ms", event_loop_start.elapsed().as_millis());
+
+    eprintln!("\n  [TIMING] ═══ TOTAL TIME: {}ms ═══\n", total_start.elapsed().as_millis());
 }

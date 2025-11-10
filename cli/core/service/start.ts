@@ -8,7 +8,8 @@
 import chalk from 'chalk'
 import {
   readGlobalConfig,
-  isLocalChainRunning
+  isLedgerReachable,
+  getLedgerUrl
 } from '../../utils/config'
 import { startLedger } from '../ledger/server'
 
@@ -16,8 +17,9 @@ export async function start(chainName?: string) {
   console.log(chalk.bold('\n🚀 Starting Tana...\n'))
 
   // Check if already running
-  if (await isLocalChainRunning()) {
-    console.log(chalk.yellow('✗ Ledger already running on port 8080'))
+  const ledgerUrl = getLedgerUrl()
+  if (await isLedgerReachable()) {
+    console.log(chalk.yellow(`✗ Ledger already running at ${ledgerUrl}`))
     console.log(chalk.gray(`\nStop the other instance first, or use a different port.\n`))
     process.exit(1)
   }

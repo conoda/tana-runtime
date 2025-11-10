@@ -26,6 +26,9 @@ const colors = {
   gray: '\x1b[90m',
 };
 
+// Get ledger URL from environment or default to localhost
+const LEDGER_URL = process.env.TANA_LEDGER_URL || 'http://localhost:8080';
+
 // Mock block context (same as sandbox)
 const mockBlock = {
   height: 12345,
@@ -46,7 +49,7 @@ const mockBlock = {
     }
 
     try {
-      const response = await fetch('http://localhost:8080/balances');
+      const response = await fetch(`${LEDGER_URL}/balances`);
       const allBalances = await response.json();
 
       const results = ids.map(userId => {
@@ -71,7 +74,7 @@ const mockBlock = {
     }
 
     try {
-      const response = await fetch('http://localhost:8080/users');
+      const response = await fetch(`${LEDGER_URL}/users`);
       const allUsers = await response.json();
 
       const results = ids.map(userId => {
@@ -93,7 +96,7 @@ const mockBlock = {
     }
 
     try {
-      const response = await fetch('http://localhost:8080/transactions');
+      const response = await fetch(`${LEDGER_URL}/transactions`);
       const allTransactions = await response.json();
 
       const results = ids.map(txId => {

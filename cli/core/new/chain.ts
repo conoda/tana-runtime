@@ -12,6 +12,7 @@ import {
   writeGlobalConfig,
   readGlobalConfig,
   readChainConfig,
+  getLedgerUrl,
   type ChainConfig,
   type GlobalConfig
 } from '../../utils/config'
@@ -36,10 +37,11 @@ export async function newChain(name: string) {
   const genesisHash = generateGenesisHash(name)
 
   // Create chain configuration
+  const ledgerUrl = getLedgerUrl()
   const chainConfig: ChainConfig = {
     name,
     type: 'local',
-    url: 'http://localhost:8080',
+    url: ledgerUrl,
     port: 8080,
     isGenesis: true,
     createdAt: new Date().toISOString(),

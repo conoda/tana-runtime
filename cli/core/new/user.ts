@@ -11,6 +11,8 @@ import { randomBytes } from 'crypto'
 import {
   writeUserConfig,
   readUserConfig,
+  getLedgerUrl,
+  isLedgerReachable,
   type UserConfig
 } from '../../utils/config'
 
@@ -29,18 +31,61 @@ export async function newUser(username: string, options: NewUserOptions) {
     process.exit(1)
   }
 
-  const spinner = createSpinner('Checking for existing user...').start()
-
-  // Check if user already exists
+  // Check if user already exists locally
+  const localSpinner = createSpinner('Checking local configuration...').start()
   const existing = readUserConfig(username)
   if (existing) {
-    spinner.error({ text: `User "${username}" already exists` })
+    localSpinner.error({ text: `User "${username}" already exists locally` })
     console.log(chalk.gray(`\nLocation: ~/.config/tana/users/${username}.json`))
     console.log(chalk.yellow(`\nUse a different username or remove the existing user first.`))
     process.exit(1)
   }
+  localSpinner.success({ text: 'No local conflicts' })
 
-  spinner.success({ text: 'No conflicts found' })
+  // Check if username is available on blockchain
+  const ledgerUrl = getLedgerUrl()
+  const blockchainSpinner = createSpinner(`Checking blockchain (${ledgerUrl})...`).start()
+
+  try {
+    // Check if ledger is reachable
+    if (!(await isLedgerReachable())) {
+      // No chain available - warn but continue (offline workflow)
+      blockchainSpinner.warn({ text: 'Ledger not reachable' })
+      console.log(chalk.yellow('\n⚠️  Warning: Could not verify username availability.'))
+      console.log(chalk.gray(`   Ledger at ${ledgerUrl} is not responding.`))
+      console.log(chalk.gray('   Start the ledger before deploying.\n'))
+    } else {
+      // Check if username exists on the blockchain
+      const response = await fetch(`${ledgerUrl}/users/username/${username}`, {
+        signal: AbortSignal.timeout(3000)
+      })
+
+      if (response.status === 200) {
+        // User exists on blockchain
+        blockchainSpinner.error({ text: `Username "${username}" is already taken` })
+        console.log(chalk.yellow(`\nThis username is already registered on the blockchain.`))
+        console.log(chalk.gray(`Ledger: ${ledgerUrl}`))
+        console.log(chalk.yellow(`\nPlease choose a different username.\n`))
+        process.exit(1)
+      } else if (response.status === 404) {
+        // Username is available
+        blockchainSpinner.success({ text: 'Username is available' })
+      } else {
+        // Unexpected response
+        throw new Error(`Unexpected response: ${response.status}`)
+      }
+    }
+  } catch (error: any) {
+    // If we can't reach the blockchain, warn but continue
+    if (error.name === 'AbortError' || error.message.includes('fetch')) {
+      blockchainSpinner.warn({ text: 'Could not reach ledger' })
+      console.log(chalk.yellow('\n⚠️  Warning: Could not verify username availability.'))
+      console.log(chalk.gray(`   Ledger at ${ledgerUrl} is unreachable.\n`))
+    } else {
+      blockchainSpinner.error({ text: error.message })
+      process.exit(1)
+    }
+  }
 
   // Generate keypair
   const keySpinner = createSpinner('Generating keypair...').start()
@@ -73,10 +118,8 @@ export async function newUser(username: string, options: NewUserOptions) {
   console.log(`  Public Key:    ${chalk.gray(publicKey.substring(0, 24) + '...')}`)
   console.log(chalk.gray('━'.repeat(50)))
 
-  console.log(chalk.bold('\nNext Steps:'))
-  console.log(`  1. Start a chain:      ${chalk.cyan(`tana start`)}`)
-  console.log(`  2. Deploy user:        ${chalk.cyan(`tana deploy user ${username}`)}`)
-  console.log(`  3. Check balance:      ${chalk.cyan(`tana balance ${username}`)}`)
+  console.log(chalk.bold('\nNext Step:'))
+  console.log(`  Deploy user:  ${chalk.cyan(`tana deploy user ${username}`)}`)
   console.log()
 
   console.log(chalk.yellow('⚠️  Keep your private key safe!'))

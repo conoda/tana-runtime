@@ -1,6 +1,7 @@
 # Rust
 /target
 runtime/target
+tana-edge/target
 
 # Node.js / Bun
 node_modules/

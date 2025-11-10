@@ -21,6 +21,10 @@ export default defineConfig({
 					autogenerate: { directory: 'tana-cli' },
 				},
 				{
+					label: 'Edge Server',
+					autogenerate: { directory: 'tana-edge' },
+				},
+				{
 					label: 'API Reference',
 					autogenerate: { directory: 'tana-api' },
 				},

@@ -188,11 +188,27 @@ export function listUsers(): string[] {
 }
 
 /**
- * Check if local chain is running
+ * Get ledger URL from environment or fallback to localhost
+ *
+ * Priority:
+ * 1. TANA_LEDGER_URL environment variable
+ * 2. http://localhost:8080 (default)
+ *
+ * Usage:
+ *   Dev:  export TANA_LEDGER_URL=http://localhost:8080
+ *   Prod: export TANA_LEDGER_URL=https://mainnet.tana.network
  */
-export async function isLocalChainRunning(port = 8080): Promise<boolean> {
+export function getLedgerUrl(): string {
+  return process.env.TANA_LEDGER_URL || 'http://localhost:8080'
+}
+
+/**
+ * Check if ledger is reachable
+ */
+export async function isLedgerReachable(): Promise<boolean> {
   try {
-    const response = await fetch(`http://localhost:${port}/health`, {
+    const ledgerUrl = getLedgerUrl()
+    const response = await fetch(`${ledgerUrl}/health`, {
       signal: AbortSignal.timeout(2000)
     })
     return response.ok
@@ -203,27 +219,15 @@ export async function isLocalChainRunning(port = 8080): Promise<boolean> {
 
 /**
  * Get deployment target
- * Returns the chain URL to deploy to, following the priority:
- * 1. Local running chain
- * 2. Default chain from config
- * 3. Prompt user (returns null to indicate prompting needed)
+ * Returns the ledger URL if reachable, null otherwise
  */
 export async function getDeploymentTarget(): Promise<string | null> {
-  // 1. Check for local running chain
-  if (await isLocalChainRunning()) {
-    return 'http://localhost:8080'
+  const ledgerUrl = getLedgerUrl()
+
+  if (await isLedgerReachable()) {
+    return ledgerUrl
   }
 
-  // 2. Check global config for default chain
-  const config = readGlobalConfig()
-  if (config?.defaultChain) {
-    const chainConfig = readChainConfig(config.defaultChain)
-    if (chainConfig?.url) {
-      return chainConfig.url
-    }
-  }
-
-  // 3. Return null to indicate user should be prompted
   return null
 }
 
