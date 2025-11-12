@@ -1,19 +1,31 @@
 ---
 title: API Overview
-description: REST API reference for the Tana Ledger Service
+description: REST API reference for Tana Services
 sidebar:
   order: 1
 ---
 
-The Tana Ledger Service provides a RESTful API for interacting with the blockchain. All endpoints return JSON responses.
+Tana provides two main REST APIs for interacting with the blockchain and managing authentication. All endpoints return JSON responses.
 
-## Base URL
+## Base URLs
+
+### Ledger Service (Blockchain API)
 
 ```
 http://localhost:8080
 ```
 
-For production deployments, replace with your server's URL.
+Handles all blockchain operations: users, balances, transactions, blocks, and smart contracts.
+
+### Identity Service (Authentication API)
+
+```
+http://localhost:8090
+```
+
+Handles mobile-first QR code authentication and session management. Private keys remain exclusively on mobile devices for security.
+
+For production deployments, replace with your server's URLs (e.g., `https://api.tana.network` and `https://auth.tana.network`).
 
 ## Authentication & Signatures
 
@@ -141,7 +153,23 @@ curl http://localhost:8080/
 
 ## API Categories
 
-### Users
+### Identity & Authentication (Port 8090)
+Mobile-first QR code authentication with hardware-backed security.
+
+- **POST /auth/session/create** - Create QR code login session
+- **GET /auth/session/:id/events** - SSE stream for real-time updates
+- **GET /auth/session/:id** - Get session details (mobile scans QR)
+- **POST /auth/session/:id/approve** - Approve login with Ed25519 signature
+- **POST /auth/session/:id/reject** - Reject login attempt
+- **POST /auth/session/validate** - Validate session token
+
+**Security Model:** Private keys ONLY on mobile devices. Desktop/laptop receives session tokens only.
+
+[View Identity API →](/tana-api/identity/)
+
+---
+
+### Users (Port 8080)
 Manage user accounts on the blockchain.
 
 - **POST /users** - Create a new user
@@ -151,7 +179,7 @@ Manage user accounts on the blockchain.
 
 [View Users API →](/tana-api/users/)
 
-### Balances
+### Balances (Port 8080)
 Query and manage multi-currency balances.
 
 - **GET /balances** - Query balances
@@ -161,7 +189,7 @@ Query and manage multi-currency balances.
 
 [View Balances API →](/tana-api/balances/)
 
-### Transactions
+### Transactions (Port 8080)
 Create and query blockchain transactions.
 
 - **POST /transactions** - Create transaction
@@ -170,7 +198,7 @@ Create and query blockchain transactions.
 
 [View Transactions API →](/tana-api/transactions/)
 
-### Blocks
+### Blocks (Port 8080)
 Query blockchain blocks and history.
 
 - **GET /blocks** - List blocks
@@ -179,7 +207,7 @@ Query blockchain blocks and history.
 
 [View Blocks API →](/tana-api/blocks/)
 
-### Contracts
+### Contracts (Port 8080)
 Deploy and manage smart contracts.
 
 - **POST /contracts** - Deploy contract
@@ -247,8 +275,10 @@ curl "http://localhost:8080/balances?ownerId=user_xyz789&currencyCode=USD"
 
 ## Next Steps
 
+- [Identity API](/tana-api/identity/) - Mobile QR code authentication
 - [Users API](/tana-api/users/) - User account management
 - [Balances API](/tana-api/balances/) - Balance queries and updates
 - [Transactions API](/tana-api/transactions/) - Transaction creation and queries
 - [Blocks API](/tana-api/blocks/) - Blockchain queries
+- [Contracts API](/tana-api/contracts/) - Smart contract deployment
 - [CLI Reference](/tana-cli/intro/) - Command-line interface

@@ -242,16 +242,227 @@ export TANA_LEDGER_URL=http://host.docker.internal:8080
 docker run --network host -e TANA_LEDGER_URL=http://localhost:8080 ...
 ```
 
-## Future Environment Variables
+## DATABASE_URL
 
-As Tana develops, additional environment variables may be added:
+**Purpose:** PostgreSQL connection string for blockchain data (ledger service)
 
-- `TANA_EDGE_URL` - Edge server endpoint
-- `TANA_STORAGE_URL` - Distributed storage endpoint
-- `TANA_PRIVATE_KEY` - For automated deployments (use with caution)
-- `TANA_LOG_LEVEL` - Logging verbosity (debug, info, warn, error)
+**Default:** None (required for ledger service)
 
-Check this page for updates as new configuration options are added.
+**Format:** `postgres://username:password@host:port/database`
+
+**Usage:**
+```bash
+# Development
+export DATABASE_URL='postgres://tana:tana_dev_password@localhost:5432/tana'
+
+# Production
+export DATABASE_URL='postgres://prod_user:secure_password@db.example.com:5432/tana_prod'
+```
+
+**Used by:**
+- Ledger service (blockchain state storage)
+- Block producer scripts
+- Database migration tools
+
+## IDENTITY_DB_URL
+
+**Purpose:** PostgreSQL connection string for authentication data (identity service)
+
+**Default:** Falls back to `DATABASE_URL` if not set
+
+**Format:** `postgres://username:password@host:port/database`
+
+**Usage:**
+```bash
+# Development (can use same database as blockchain)
+export IDENTITY_DB_URL='postgres://tana:tana_dev_password@localhost:5432/tana'
+
+# Production (recommended: separate database for security)
+export IDENTITY_DB_URL='postgres://identity_user:secure_password@identity-db.example.com:5432/tana_identity'
+```
+
+**Notes:**
+- Authentication tables are separate from blockchain data
+- NOT replicated across validators
+- Can use same database as `DATABASE_URL` (tables don't overlap)
+- Identity service only runs on API nodes (not validators)
+
+**Used by:**
+- Identity service (QR authentication, session management)
+
+## REDIS_URL
+
+**Purpose:** Redis connection string for transaction queue
+
+**Default:** `redis://localhost:6379`
+
+**Format:** `redis://[username:password@]host:port[/database]`
+
+**Usage:**
+```bash
+# Development
+export REDIS_URL='redis://localhost:6379'
+
+# Production with authentication
+export REDIS_URL='redis://username:password@redis.example.com:6379'
+
+# Redis Cluster
+export REDIS_URL='redis://redis-cluster.example.com:6379'
+```
+
+**Requirements:**
+- Redis 7+ required (Redis Streams support)
+- Must support XADD, XREADGROUP, XACK commands
+- Shared by all validators in the network
+
+**Used by:**
+- Ledger service (transaction submission)
+- Queue service (transaction queueing)
+- Block producer scripts (transaction consumption)
+
+## PORT
+
+**Purpose:** HTTP port for ledger service API
+
+**Default:** `8080`
+
+**Usage:**
+```bash
+# Development (default)
+export PORT=8080
+
+# Production (custom port)
+export PORT=3000
+```
+
+**Used by:**
+- Ledger service HTTP server
+
+## IDENTITY_PORT
+
+**Purpose:** HTTP port for identity service API
+
+**Default:** `8090`
+
+**Usage:**
+```bash
+# Development (default)
+export IDENTITY_PORT=8090
+
+# Production (custom port)
+export IDENTITY_PORT=3001
+```
+
+**Used by:**
+- Identity service HTTP server
+
+## EDGE_PORT
+
+**Purpose:** HTTP port for edge server (contract execution)
+
+**Default:** `8180`
+
+**Usage:**
+```bash
+# Development (default)
+export EDGE_PORT=8180
+
+# Production (custom port)
+export EDGE_PORT=8000
+```
+
+**Used by:**
+- Tana Edge server (Rust binary)
+
+## Service URLs for Client Applications
+
+**Purpose:** Configure client apps to connect to Tana services
+
+### TANA_IDENTITY_URL
+
+**Default:** `http://localhost:8090`
+
+**Usage:**
+```bash
+# Development
+export TANA_IDENTITY_URL=http://localhost:8090
+
+# Production
+export TANA_IDENTITY_URL=https://auth.tana.network
+```
+
+**Used by:**
+- Website applications (QR login pages)
+- Mobile apps (authentication flows)
+
+### TANA_EDGE_URL
+
+**Default:** `http://localhost:8180`
+
+**Usage:**
+```bash
+# Development
+export TANA_EDGE_URL=http://localhost:8180
+
+# Production
+export TANA_EDGE_URL=https://edge.tana.network
+```
+
+**Used by:**
+- Applications calling contract endpoints
+- Edge function deployments
+
+## Complete Development Setup
+
+For local development, create a `.env` file in your project root:
+
+```bash
+# .env
+
+# Database connections
+DATABASE_URL='postgres://tana:tana_dev_password@localhost:5432/tana'
+IDENTITY_DB_URL='postgres://tana:tana_dev_password@localhost:5432/tana'
+REDIS_URL='redis://localhost:6379'
+
+# Service ports
+PORT=8080                    # Ledger service
+IDENTITY_PORT=8090           # Identity service
+EDGE_PORT=8180              # Edge server
+
+# Client URLs (for connecting to services)
+TANA_LEDGER_URL=http://localhost:8080
+TANA_IDENTITY_URL=http://localhost:8090
+TANA_EDGE_URL=http://localhost:8180
+
+# Environment
+NODE_ENV=development
+```
+
+## Complete Production Setup
+
+For production deployment:
+
+```bash
+# .env.production
+
+# Database connections (use secure passwords!)
+DATABASE_URL='postgres://prod_user:SECURE_PASSWORD@db.internal:5432/tana_prod'
+IDENTITY_DB_URL='postgres://identity_user:SECURE_PASSWORD@identity-db.internal:5432/tana_identity'
+REDIS_URL='redis://redis_user:SECURE_PASSWORD@redis.internal:6379'
+
+# Service ports (behind reverse proxy)
+PORT=8080
+IDENTITY_PORT=8090
+EDGE_PORT=8180
+
+# Public URLs (with SSL)
+TANA_LEDGER_URL=https://api.tana.network
+TANA_IDENTITY_URL=https://auth.tana.network
+TANA_EDGE_URL=https://edge.tana.network
+
+# Environment
+NODE_ENV=production
+```
 
 ## Best Practices
 

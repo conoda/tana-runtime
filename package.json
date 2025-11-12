@@ -4,13 +4,16 @@
   "private": true,
   "description": "Tana blockchain - Monorepo for all services",
   "workspaces": [
-    "ledger",
-    "cli"
+    "cli",
+    "cli/services/ledger",
+    "cli/services/queue",
+    "cli/services/identity"
   ],
   "scripts": {
     "dev": "./dev.sh",
     "dev:mprocs": "mprocs",
-    "dev:ledger": "cd ledger && bun run dev",
+    "dev:ledger": "cd cli/services/ledger && bun run dev",
+    "dev:identity": "cd cli/services/identity && bun run dev",
     "dev:cli": "cd cli && bun run dev",
     "dev:website": "cd websites/landing && npm run dev",
     "dev:runtime": "cd runtime && cargo run",
@@ -27,9 +30,9 @@
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f",
     "install:all": "bun install && cd runtime && cargo build",
-    "pending": "cd ledger && bun run pending",
-    "block": "cd ledger && bun run block",
-    "genesis": "cd ledger && bun run blockchain:genesis"
+    "pending": "cd cli/services/ledger && bun run pending",
+    "block": "cd cli/services/ledger && bun run block",
+    "genesis": "cd cli/services/ledger && bun run blockchain:genesis"
   },
   "devDependencies": {
     "@types/bun": "latest",
